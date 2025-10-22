@@ -522,6 +522,11 @@ class BuildStartRequest(BaseModel):
     cleanup: Optional[bool] = True
     tag: Optional[str] = None
     app_id: Optional[str] = None
+    # SFTP deployment parameters
+    sftp_host: Optional[str] = None
+    sftp_username: Optional[str] = None
+    sftp_password: Optional[str] = None
+    sftp_port: Optional[int] = 22
 
 @app.post("/docker/build/start")
 def docker_build_start(req: BuildStartRequest):
@@ -553,6 +558,10 @@ def docker_build_start(req: BuildStartRequest):
                     cleanup=req.cleanup,
                     emit=_emit,
                     app_id=req.app_id,
+                    sftp_host=req.sftp_host,
+                    sftp_username=req.sftp_username,
+                    sftp_password=req.sftp_password,
+                    sftp_port=req.sftp_port,
                 )
                 set_completed(task_id, result)
             except Exception as e:

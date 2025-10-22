@@ -10,6 +10,11 @@ import time
 import requests
 import json
 import re
+import shutil
+import subprocess
+import gzip
+import paramiko
+import posixpath
 from config_service import get_log_endpoint, get_auth_header
 
 
@@ -506,7 +511,136 @@ def blue_green_deploy(base_id_or_name: str, image_repo: str, tag: str, wait_seco
         "wait_seconds": wait_seconds,
     }
 
-def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile: Optional[str] = None, build_args: Optional[Dict[str, str]] = None, task_id: Optional[str] = None, override_log_endpoint: Optional[str] = None, dockerfile_content: Optional[str] = None, dockerfile_name: Optional[str] = None, cleanup: Optional[bool] = True, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None) -> dict:
+
+def transfer_build_to_sftp(build_dir: str, task_id: str, sftp_host: str, sftp_username: str, sftp_password: Optional[str] = None, sftp_port: int = 22, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Transfer the entire build directory to SFTP server at /upload/pxxl/applications/{task_id}
+    """
+    def _emit_log(message: str, level: str = "info"):
+        if emit:
+            emit({
+                "task": "sftp_transfer",
+                "task_id": task_id,
+                "stage": "deployment",
+                "status": "progress",
+                "message": message,
+                "level": level,
+                "app_id": app_id,
+            })
+    
+    try:
+        _emit_log("Starting SFTP transfer to production server")
+        
+        # Create SSH client
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        
+        # Connect to SFTP server
+        _emit_log(f"Connecting to SFTP server {sftp_host}:{sftp_port}")
+        ssh.connect(
+            hostname=sftp_host,
+            port=sftp_port,
+            username=sftp_username,
+            password=sftp_password,
+            timeout=30
+        )
+        
+        # Create SFTP client
+        sftp = ssh.open_sftp()
+        
+        # Create remote directory path
+        remote_base_dir = "/upload/pxxl/applications"
+        remote_dir = f"{remote_base_dir}/{task_id}"
+        
+        _emit_log(f"Ensuring remote directory exists: {remote_dir}")
+        
+        # Robust mkdir -p implementation for SFTP (create parents step-by-step)
+        def ensure_remote_dirs(path: str):
+            parts = [p for p in path.split('/') if p]
+            current = '/' if path.startswith('/') else ''
+            for part in parts:
+                next_path = posixpath.join(current, part) if current not in ('', '/') else ('/' + part if current == '/' else part)
+                try:
+                    sftp.stat(next_path)
+                except IOError:
+                    try:
+                        sftp.mkdir(next_path)
+                    except IOError:
+                        pass
+                current = next_path
+        
+        # Ensure base and target directory exist
+        ensure_remote_dirs(remote_base_dir)
+        ensure_remote_dirs(remote_dir)
+        
+        # Transfer all files and directories recursively
+        _emit_log(f"Transferring build directory from {build_dir} to {remote_dir}")
+        
+        def upload_recursive(local_path: str, remote_path: str):
+            for item in os.listdir(local_path):
+                local_item = os.path.join(local_path, item)
+                remote_item = f"{remote_path}/{item}"
+                
+                if os.path.isfile(local_item):
+                    _emit_log(f"Uploading file: {item}")
+                    sftp.put(local_item, remote_item)
+                elif os.path.isdir(local_item):
+                    _emit_log(f"Ensuring remote subdirectory exists: {remote_item}")
+                    try:
+                        # Create parent directories step-by-step
+                        parts = [p for p in remote_item.split('/') if p]
+                        current = '/' if remote_item.startswith('/') else ''
+                        for part in parts:
+                            next_path = posixpath.join(current, part) if current not in ('', '/') else ('/' + part if current == '/' else part)
+                            try:
+                                sftp.stat(next_path)
+                            except IOError:
+                                try:
+                                    sftp.mkdir(next_path)
+                                except IOError:
+                                    pass
+                            current = next_path
+                    except Exception:
+                        pass
+                    upload_recursive(local_item, remote_item)
+        
+        upload_recursive(build_dir, remote_dir)
+        
+        # Get transfer statistics
+        total_size = 0
+        file_count = 0
+        for root, dirs, files in os.walk(build_dir):
+            for file in files:
+                file_path = os.path.join(root, file)
+                total_size += os.path.getsize(file_path)
+                file_count += 1
+        
+        _emit_log(f"Transfer completed successfully. Files: {file_count}, Total size: {total_size} bytes")
+        
+        # Close connections
+        sftp.close()
+        ssh.close()
+        
+        return {
+            "status": "success",
+            "remote_path": remote_dir,
+            "files_transferred": file_count,
+            "total_size_bytes": total_size,
+            "sftp_host": sftp_host,
+            "sftp_port": sftp_port
+        }
+        
+    except Exception as e:
+        error_msg = f"SFTP transfer failed: {str(e)}"
+        _emit_log(error_msg, "error")
+        return {
+            "status": "error",
+            "error": error_msg,
+            "sftp_host": sftp_host,
+            "sftp_port": sftp_port
+        }
+
+def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile: Optional[str] = None, build_args: Optional[Dict[str, str]] = None, task_id: Optional[str] = None, override_log_endpoint: Optional[str] = None, dockerfile_content: Optional[str] = None, dockerfile_name: Optional[str] = None, cleanup: Optional[bool] = True, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None, sftp_host: Optional[str] = None, sftp_username: Optional[str] = None, sftp_password: Optional[str] = None, sftp_port: Optional[int] = 22) -> dict:
     client = get_client()
     endpoint = override_log_endpoint or get_log_endpoint()
     headers = get_auth_header()
@@ -925,6 +1059,42 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 _append_line(error_log_path, f"Image export/compression error: {export_error}")
                 _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "export_compression_error", "error": str(export_error)})
 
+        # SFTP Transfer to production server if SFTP parameters are provided
+        sftp_result = None
+        if sftp_host and sftp_username and task_logs_dir:
+            try:
+                _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] starting SFTP transfer to production server")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "sftp_transfer_start", "sftp_host": sftp_host, "sftp_port": sftp_port})
+                
+                sftp_result = transfer_build_to_sftp(
+                    build_dir=task_logs_dir,
+                    task_id=task_id,
+                    sftp_host=sftp_host,
+                    sftp_username=sftp_username,
+                    sftp_password=sftp_password,
+                    sftp_port=sftp_port or 22,
+                    emit=emit,
+                    app_id=app_id
+                )
+                
+                if sftp_result["status"] == "success":
+                    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP transfer completed successfully to {sftp_result['remote_path']}")
+                    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "sftp_transfer_completed", 
+                                                       "remote_path": sftp_result["remote_path"], 
+                                                       "files_transferred": sftp_result["files_transferred"],
+                                                       "total_size_bytes": sftp_result["total_size_bytes"]})
+                else:
+                    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP transfer failed: {sftp_result['error']}")
+                    _append_line(error_log_path, f"SFTP transfer error: {sftp_result['error']}")
+                    _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "sftp_transfer_error", "error": sftp_result["error"]})
+                    
+            except Exception as sftp_error:
+                error_msg = f"SFTP transfer exception: {str(sftp_error)}"
+                _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {error_msg}")
+                _append_line(error_log_path, error_msg)
+                _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "sftp_transfer_exception", "error": error_msg})
+                sftp_result = {"status": "error", "error": error_msg}
+
         # Write a summary JSON for convenience
         try:
             if task_logs_dir:
@@ -942,6 +1112,8 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 if compressed_image_path:
                     summary_data["compressed_image_path"] = compressed_image_path
                     summary_data["compressed_image_size_bytes"] = os.path.getsize(compressed_image_path) if os.path.exists(compressed_image_path) else 0
+                if sftp_result:
+                    summary_data["sftp_deployment"] = sftp_result
                 _write_json(summary_path, summary_data)
         except Exception:
             pass
