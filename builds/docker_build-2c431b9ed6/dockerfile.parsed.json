@@ -1,0 +1,34 @@
+{
+  "ops": [
+    {
+      "line": 1,
+      "op": "FROM",
+      "instruction": "FROM nginx:alpine",
+      "args": "nginx:alpine"
+    },
+    {
+      "line": 3,
+      "op": "WORKDIR",
+      "instruction": "WORKDIR /usr/share/nginx/html",
+      "args": "/usr/share/nginx/html"
+    },
+    {
+      "line": 5,
+      "op": "RUN",
+      "instruction": "RUN apk add --no-cache git && rm -rf ./* && git clone https://github.com/ikwerre-dev/html-site.git . && rm -rf .git",
+      "args": "apk add --no-cache git && rm -rf ./* && git clone https://github.com/ikwerre-dev/html-site.git . && rm -rf .git"
+    },
+    {
+      "line": 7,
+      "op": "EXPOSE",
+      "instruction": "EXPOSE 80",
+      "args": "80"
+    },
+    {
+      "line": 9,
+      "op": "CMD",
+      "instruction": "CMD [\"nginx\", \"-g\", \"daemon off;\"]",
+      "args": "[\"nginx\", \"-g\", \"daemon off;\"]"
+    }
+  ]
+}

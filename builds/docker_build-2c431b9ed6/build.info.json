@@ -1,0 +1,11 @@
+{
+  "status": "ok",
+  "image_id": "3d5d451e50e1",
+  "tag": "html-site1:latest",
+  "dockerfile_used": "Dockerfile",
+  "inline": true,
+  "duration_sec": 4.954,
+  "steps_detected": 5,
+  "app_id": "html-site1",
+  "build_args": {}
+}

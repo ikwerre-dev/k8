@@ -11,7 +11,6 @@ import requests
 import json
 import re
 from config_service import get_log_endpoint, get_auth_header
-import subprocess
 
 
 def get_client() -> docker.DockerClient:
@@ -854,128 +853,9 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
         _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] build completed image_id={image_id or ''} duration={total_dur}s app_id={app_id or ''}")
         _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] build completed image_id={image_id or ''} duration={total_dur}s app_id={app_id or ''}")
         _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "build_completed", "image_id": image_id, "tag": tag, "duration_sec": total_dur, "app_id": app_id})
-
-        # Post-build: tag and push to Docker Hub under codewithhonour/{buildname}:build_{taskid}
-        publish_logs: List[str] = []
-        dockerhub_repo_tag: Optional[str] = None
-        try:
-            buildname = (app_id or (tag.split(":")[0].split("/")[-1] if tag else "build"))
-            suffix = (task_id.split("-")[-1] if task_id else time.strftime('%Y%m%d%H%M%S'))
-            dockerhub_repo = f"codewithhonour/{buildname}"
-            dockerhub_tag = f"build_{suffix}"
-            dockerhub_repo_tag = f"{dockerhub_repo}:{dockerhub_tag}"
-            _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] publish tagging image_id={image_id or ''} as {dockerhub_repo_tag}")
-            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "publish_tag_start", "image_id": image_id, "target": dockerhub_repo_tag})
-
-            # Tag locally
-            try:
-                client.images.get(image_id).tag(dockerhub_repo, tag=dockerhub_tag)
-                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "publish_tag_complete", "target": dockerhub_repo_tag})
-            except Exception as te:
-                _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "publish_tag_error", "error": str(te), "target": dockerhub_repo_tag})
-                publish_logs.append(f"tag_error: {str(te)}")
-                raise
-
-            # Optional login from env
-            username = os.environ.get("DOCKERHUB_USERNAME")
-            password = os.environ.get("DOCKERHUB_PASSWORD")
-            if username and password:
-                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "publish_login_start", "registry": "dockerhub", "username": username})
-                try:
-                    client.login(username=username, password=password, registry="https://index.docker.io/v1/")
-                    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "publish_login_complete", "registry": "dockerhub"})
-                except Exception as le:
-                    _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "publish_login_error", "error": str(le)})
-                    publish_logs.append(f"login_error: {str(le)}")
-            else:
-                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "publish_login_skipped"})
-
-            # Push stream
-            _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] publish pushing {dockerhub_repo_tag}")
-            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "publish_push_start", "repo_tag": dockerhub_repo_tag})
-            try:
-                for pl in client.images.push(dockerhub_repo_tag, stream=True, decode=True):
-                    line_text = pl.get("status") or pl.get("stream") or pl.get("error") or json.dumps(pl)
-                    publish_logs.append(line_text)
-                    _append_line(build_log_path, line_text)
-                    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "publish_chunk", "chunk": pl})
-                    if endpoint:
-                        payload = {"task": "docker_build", "task_id": task_id, "stage": "publish", "status": "stream", "chunk": pl, "app_id": app_id}
-                        try:
-                            requests.post(endpoint, json=payload, headers=headers, timeout=3)
-                        except Exception:
-                            pass
-                    if emit:
-                        try:
-                            emit({"task": "docker_build", "task_id": task_id, "stage": "publish", "status": "stream", "chunk": pl, "app_id": app_id})
-                        except Exception:
-                            pass
-                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "publish_push_complete", "repo_tag": dockerhub_repo_tag})
-                if emit:
-                    try:
-                        emit({"task": "docker_build", "task_id": task_id, "stage": "publish", "status": "completed", "repo_tag": dockerhub_repo_tag, "app_id": app_id})
-                    except Exception:
-                        pass
-            except Exception as pe:
-                _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "publish_push_error", "error": str(pe), "repo_tag": dockerhub_repo_tag})
-                publish_logs.append(f"push_error: {str(pe)}")
-        except Exception:
-            pass
-
-        # Archive image to zstd in task folder, then cleanup image and prune build cache
-        archive_path = None
-        removed_image = False
-        pruned_builder_cache = False
-        try:
-            if task_logs_dir and image_id:
-                archive_path = os.path.join(task_logs_dir, "image.tar.zst")
-                _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] archive start to {archive_path}")
-                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "archive_start", "path": archive_path})
-                try:
-                    img = client.images.get(image_id)
-                    # Launch zstd compressor
-                    zstd_proc = subprocess.Popen(["zstd", "-T0", "-f", "-q", "-o", archive_path], stdin=subprocess.PIPE)
-                    total_bytes = 0
-                    for chunk in img.save(named=True):
-                        if zstd_proc.stdin:
-                            zstd_proc.stdin.write(chunk)
-                        total_bytes += len(chunk)
-                        if total_bytes % (10 * 1024 * 1024) == 0:  # every ~10MB
-                            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "archive_progress", "bytes": total_bytes})
-                    if zstd_proc.stdin:
-                        zstd_proc.stdin.close()
-                    zstd_code = zstd_proc.wait()
-                    if zstd_code == 0:
-                        size = os.path.getsize(archive_path)
-                        _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] archive complete size={size} bytes")
-                        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "archive_complete", "path": archive_path, "size": size, "bytes": total_bytes})
-                    else:
-                        _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "archive_error", "code": zstd_code})
-                except Exception as ae:
-                    _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "archive_error", "error": str(ae)})
-            # Remove image
-            if image_id:
-                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cleanup_remove_image_start", "image_id": image_id})
-                try:
-                    client.images.remove(image_id, force=False)
-                    removed_image = True
-                    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cleanup_remove_image_complete", "image_id": image_id})
-                except Exception as re:
-                    _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "cleanup_remove_image_error", "error": str(re)})
-            # Prune builder cache
-            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cleanup_prune_build_cache_start"})
-            try:
-                client.api.prune_builds()
-                pruned_builder_cache = True
-                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cleanup_prune_build_cache_complete"})
-            except Exception as pe:
-                _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "cleanup_prune_build_cache_error", "error": str(pe)})
-        except Exception:
-            pass
-
         # Write a summary JSON for convenience
         try:
-            if summary_path:
+            if task_logs_dir:
                 _write_json(summary_path, {
                     "status": "ok",
                     "image_id": image_id,
@@ -986,10 +866,6 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                     "steps_detected": len(steps),
                     "app_id": app_id,
                     "build_args": build_args or {},
-                    "dockerhubtag": dockerhub_repo_tag,
-                    "publish": {"repo_tag": dockerhub_repo_tag, "lines": publish_logs[-50:]},
-                    "archive_path": archive_path,
-                    "cleanup": {"removed_image": removed_image, "pruned_builder_cache": pruned_builder_cache},
                 })
         except Exception:
             pass
@@ -1000,13 +876,6 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             "dockerfile_used": df_arg or "Dockerfile",
             "inline": bool(dockerfile_content),
             "logs": logs_collected[-10:],
-            "duration_sec": total_dur,
-            "steps": steps,
-            "steps_completed": len(steps),
-            "dockerhubtag": dockerhub_repo_tag,
-            "publish": {"repo_tag": dockerhub_repo_tag, "lines": publish_logs[-100:]},
-            "archive_path": archive_path,
-            "cleanup": {"removed_image": removed_image, "pruned_builder_cache": pruned_builder_cache},
         }
     except Exception as e:
         # Append error logs

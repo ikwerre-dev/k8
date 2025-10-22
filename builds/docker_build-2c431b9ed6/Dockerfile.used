@@ -1,0 +1,9 @@
+FROM nginx:alpine
+
+WORKDIR /usr/share/nginx/html
+
+RUN apk add --no-cache git && rm -rf ./* && git clone https://github.com/ikwerre-dev/html-site.git . && rm -rf .git
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
