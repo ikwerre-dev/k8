@@ -13,7 +13,7 @@ import system_service as sys
 import nginx_service as ns
 import task_service as ts
 import db_service as db
-
+ 
 app = FastAPI(title="Docker Manager API")
 
 class BuildRequest(BaseModel):
@@ -49,7 +49,7 @@ class LocalRunRequest(BaseModel):
     mount_path: Optional[str] = None
     mode: Optional[str] = "rw"
 
-# --- Network management ---
+# --- Network management --- 
 class NetworkCreateRequest(BaseModel):
     name: str
     driver: Optional[str] = "bridge"
@@ -1295,14 +1295,14 @@ def docker_volume_remove_and_delete(req: VolumeRemoveAndDeleteRequest):
 
 
 class DatabaseCreateRequest(BaseModel):
-    type: str  # "postgres" or "mysql"
+    type: str  # "postgres", "mysql", "mongodb", or "redis"
     tag: Optional[str] = "latest"
     container_name: Optional[str] = None
     host_port: Optional[int] = None
-    username: Optional[str] = None      # postgres user or mysql app user
-    password: Optional[str] = None      # postgres user password or mysql app user password
-    root_password: Optional[str] = None # mysql root password
-    db_name: Optional[str] = None       # database name
+    username: Optional[str] = None      # postgres user, mysql app user, or mongodb root user
+    password: Optional[str] = None      # postgres user password, mysql app user password, or redis password
+    root_password: Optional[str] = None # mysql root password or mongodb root password
+    db_name: Optional[str] = None       # database name (mongo: MONGO_INITDB_DATABASE)
 
 @app.post("/database/create")
 def database_create(req: DatabaseCreateRequest):
@@ -1338,4 +1338,148 @@ def docker_container_stop_by_name(req: ContainerNameRequest):
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class DatabaseDeleteRequest(BaseModel):
+    name: str
+    force: Optional[bool] = True
+    stop_first: Optional[bool] = True
+
+@app.post("/database/delete")
+def database_delete(req: DatabaseDeleteRequest):
+    try:
+        stop_res = None
+        if req.stop_first:
+            try:
+                stop_res = ds.stop_container(req.name)
+            except Exception as e:
+                stop_res = {"error": str(e)}
+        rm_res = ds.remove_container(req.name, force=bool(req.force))
+        return {"status": "ok", "stop": stop_res, "remove": rm_res}
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Return 404 for missing container if identifiable
+        msg = str(e)
+        if "No such" in msg or "not found" in msg:
+            raise HTTPException(status_code=404, detail={"status": "not_found", "name": req.name, "error": msg})
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class DatabaseStatusRequest(BaseModel):
+    name: str
+
+@app.post("/database/status")
+def database_status(req: DatabaseStatusRequest):
+    try:
+        details = ds.inspect_container_details(req.name)
+        state = details.get("state") or {}
+        running = bool(state.get("Running"))
+        return {"name": details.get("name"), "id": details.get("id"), "running": running, "state": state}
+    except Exception as e:
+        msg = str(e)
+        if "No such" in msg or "not found" in msg:
+            raise HTTPException(status_code=404, detail={"status": "not_found", "name": req.name, "error": msg})
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class DatabaseDetailsRequest(BaseModel):
+    name: str
+
+@app.post("/database/details")
+def database_details(req: DatabaseDetailsRequest):
+    try:
+        info = ds.inspect_container_details(req.name)
+        return info
+    except Exception as e:
+        msg = str(e)
+        if "No such" in msg or "not found" in msg:
+            raise HTTPException(status_code=404, detail={"status": "not_found", "name": req.name, "error": msg})
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class DatabaseLogsRequest(BaseModel):
+    name: str
+    tail: Optional[int] = 200
+
+@app.post("/database/logs")
+def database_logs(req: DatabaseLogsRequest):
+    try:
+        res = ds.container_logs(req.name, tail=int(req.tail or 200), timestamps=True)
+        text = res.get("logs") or ""
+        lines = res.get("lines") or text.splitlines()
+        entries = []
+        for line in lines:
+            ts = None
+            msg = line
+            parts = line.split(" ", 1)
+            if len(parts) == 2 and parts[0].startswith("20") and ("T" in parts[0]):
+                ts = parts[0]
+                msg = parts[1]
+            entries.append({"timestamp": ts, "logs": msg})
+        return {"entries": entries}
+    except Exception as e:
+        msg = str(e)
+        if "No such" in msg or "not found" in msg:
+            raise HTTPException(status_code=404, detail={"status": "not_found", "name": req.name, "error": msg})
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class DatabaseLogsJsonRequest(BaseModel):
+    name: str 
+    tail: Optional[int] = 200
+
+@app.post("/database/logs-json")
+def database_logs_json(req: DatabaseLogsJsonRequest):
+    try:
+        res = ds.container_logs(req.name, tail=int(req.tail or 200), timestamps=True)
+        text = res.get("logs") or ""
+        lines = res.get("lines") or text.splitlines()
+        entries = []
+        for line in lines:
+            ts = None
+            msg = line
+            parts = line.split(" ", 1)
+            if len(parts) == 2 and parts[0].startswith("20") and ("T" in parts[0]):
+                ts = parts[0]
+                msg = parts[1]
+            try:
+                obj = json.loads(msg)
+                entries.append({"timestamp": ts, "logs": obj})
+            except Exception:
+                entries.append({"timestamp": ts, "logs": msg})
+        return {"entries": entries}
+    except Exception as e:
+        msg = str(e)
+        if "No such" in msg or "not found" in msg:
+            raise HTTPException(status_code=404, detail={"status": "not_found", "name": req.name, "error": msg})
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/docker/container/start-by-name")
+def docker_container_start_by_name(req: ContainerNameRequest):
+    try:
+        res = ds.start_container(req.name)
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        msg = str(e)
+        if "No such" in msg or "not found" in msg:
+            raise HTTPException(status_code=404, detail={"status": "not_found", "name": req.name, "error": msg})
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/docker/container/restart-by-name")
+def docker_container_restart_by_name(req: ContainerNameRequest):
+    try:
+        res = ds.restart_container(req.name)
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        msg = str(e)
+        if "No such" in msg or "not found" in msg:
+            raise HTTPException(status_code=404, detail={"status": "not_found", "name": req.name, "error": msg})
         raise HTTPException(status_code=500, detail=str(e))

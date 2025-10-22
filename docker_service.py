@@ -152,11 +152,13 @@ def prune_system() -> Dict[str, Any]:
     }
 
 
-def container_logs(id_or_name: str, tail: int = 100) -> Dict[str, Any]:
+def container_logs(id_or_name: str, tail: int = 100, timestamps: bool = False) -> Dict[str, Any]:
     client = get_client()
     c = client.containers.get(id_or_name)
-    logs = c.logs(tail=tail).decode("utf-8", errors="ignore")
-    return {"id": c.id, "name": c.name, "logs": logs}
+    raw = c.logs(tail=tail, timestamps=timestamps)
+    text = raw.decode("utf-8", errors="ignore") if isinstance(raw, (bytes, bytearray)) else str(raw)
+    lines = text.splitlines()
+    return {"id": c.id, "name": c.name, "logs": text, "lines": lines, "timestamps": timestamps}
 
 
 def exec_in_container(id_or_name: str, cmd: str) -> Dict[str, Any]:
@@ -2236,16 +2238,18 @@ def create_database_container(
     host_port: Optional[int] = None,
     network: Optional[str] = "nginx-network",
 ) -> Dict[str, Any]:
-    """Create a database container (postgres or mysql) and return details.
+    """Create a database container and return details.
 
+    Supported types: postgres, mysql, mongodb, redis
     - Ensures network exists and runs the container using run_container_extended
     - Supports optional host_port mapping; if not provided, Docker auto-assigns and we inspect
     - Returns container id/name, image, ports, and computed connection URLs
     """
     client = get_client()
 
-    db = (db_type or "").strip().lower()
-    if db not in ("postgres", "mysql"):
+    db_in = (db_type or "").strip().lower()
+    db = "postgres" if db_in == "postgres" else ("mysql" if db_in == "mysql" else ("mongodb" if db_in in ("mongodb", "mongo") else ("redis" if db_in == "redis" else None)))
+    if not db:
         return {"status": "error", "message": f"Unsupported db_type: {db_type}"}
 
     # Ensure network exists
@@ -2256,20 +2260,21 @@ def create_database_container(
     except Exception:
         pass
 
-    # Build image and env
-    image = f"{('postgres' if db == 'postgres' else 'mysql')}:{tag or 'latest'}"
+    # Build image/env/command/port key
     env: Dict[str, str] = {}
-    container_port_key = "5432/tcp" if db == "postgres" else "3306/tcp"
-
+    command: Optional[str] = None
     if db == "postgres":
+        image = f"postgres:{tag or 'latest'}"
+        container_port_key = "5432/tcp"
         if not username or not password:
             return {"status": "error", "message": "POSTGRES requires username and password"}
         env["POSTGRES_USER"] = username
         env["POSTGRES_PASSWORD"] = password
         if db_name:
             env["POSTGRES_DB"] = db_name
-    else:
-        # MySQL
+    elif db == "mysql":
+        image = f"mysql:{tag or 'latest'}"
+        container_port_key = "3306/tcp"
         if not root_password:
             return {"status": "error", "message": "MYSQL requires root_password"}
         env["MYSQL_ROOT_PASSWORD"] = root_password
@@ -2278,6 +2283,22 @@ def create_database_container(
         if username and password:
             env["MYSQL_USER"] = username
             env["MYSQL_PASSWORD"] = password
+    elif db == "mongodb":
+        image = f"mongo:{tag or 'latest'}"
+        container_port_key = "27017/tcp"
+        # For MongoDB, set root user via env
+        if not username or not root_password:
+            return {"status": "error", "message": "MONGODB requires username and root_password"}
+        env["MONGO_INITDB_ROOT_USERNAME"] = username
+        env["MONGO_INITDB_ROOT_PASSWORD"] = root_password
+        if db_name:
+            env["MONGO_INITDB_DATABASE"] = db_name
+    else:  # redis
+        image = f"redis:{tag or 'latest'}"
+        container_port_key = "6379/tcp"
+        # Redis doesn't support password via env in official image; use command override
+        if password:
+            command = f"redis-server --requirepass {password}"
 
     # Ports mapping
     ports = {container_port_key: int(host_port)} if host_port else None
@@ -2294,6 +2315,7 @@ def create_database_container(
         env=env,
         ports=ports,
         network=network,
+        command=command,
         detach=True,
     )
 
@@ -2313,28 +2335,42 @@ def create_database_container(
         details = {}
 
     # Compute URLs
-    final_db_name = db_name or (username if (db == "postgres" and username) else None)
     host = "localhost"
     internal_host = container_name
     if db == "postgres":
+        final_db_name = db_name or (username if username else None)
         user_for_url = username or "postgres"
         pass_for_url = password or ""
         external_url = f"postgresql://{user_for_url}:{pass_for_url}@{host}:{host_port_val or (host_port or 5432)}/{final_db_name or ''}".rstrip("/")
         internal_url = f"postgresql://{user_for_url}:{pass_for_url}@{internal_host}:5432/{final_db_name or ''}".rstrip("/")
         urls = {"external_url": external_url, "internal_url": internal_url}
-    else:
-        # MySQL
+    elif db == "mysql":
         user_for_url = username or "root"
         pass_for_url = (password if username else root_password) or ""
         external_url = f"mysql://{user_for_url}:{pass_for_url}@{host}:{host_port_val or (host_port or 3306)}/{(db_name or '')}".rstrip("/")
         internal_url = f"mysql://{user_for_url}:{pass_for_url}@{internal_host}:3306/{(db_name or '')}".rstrip("/")
-        # If a separate app user is created, also provide root URL
         root_url = None
         if username and password and root_password:
             root_url = f"mysql://root:{root_password}@{host}:{host_port_val or (host_port or 3306)}/{(db_name or '')}".rstrip("/")
         urls = {"external_url": external_url, "internal_url": internal_url}
         if root_url:
             urls["root_external_url"] = root_url
+    elif db == "mongodb":
+        # Root user is created in 'admin' authSource by init
+        auth_qs = "?authSource=admin"
+        db_path = f"/{db_name}" if db_name else "/"
+        external_url = f"mongodb://{username}:{root_password}@{host}:{host_port_val or (host_port or 27017)}{db_path}{auth_qs}".rstrip("/")
+        internal_url = f"mongodb://{username}:{root_password}@{internal_host}:27017{db_path}{auth_qs}".rstrip("/")
+        urls = {"external_url": external_url, "internal_url": internal_url}
+    else:  # redis
+        port_val = host_port_val or (host_port or 6379)
+        if password:
+            external_url = f"redis://:{password}@{host}:{port_val}/0"
+            internal_url = f"redis://:{password}@{internal_host}:6379/0"
+        else:
+            external_url = f"redis://{host}:{port_val}/0"
+            internal_url = f"redis://{internal_host}:6379/0"
+        urls = {"external_url": external_url, "internal_url": internal_url}
 
     # Mask sensitive env values in response copy
     env_safe = {}
