@@ -681,7 +681,10 @@ def pipeline_html_site_start(req: HtmlSitePipelineRequest):
 @app.get("/tasks/logs/{task_id}")
 def tasks_logs(task_id: str, tail: int = 200):
     try:
+        import json
         from task_registry import get
+        
+        # Get task registry info
         t = get(task_id)
         events = t.get("events", []) if isinstance(t, dict) else []
         lines = []
@@ -694,7 +697,101 @@ def tasks_logs(task_id: str, tail: int = 200):
                     line = str(chunk)
                 lines.append(line)
         status = t.get("status") if isinstance(t, dict) else "unknown"
-        return {"task_id": task_id, "status": status, "lines": lines[-tail:]}
+        
+        # Enhanced: Load comprehensive build information from builds directory
+        builds_dir = os.path.join(os.path.dirname(__file__), "builds", task_id)
+        build_info = {
+            "task_id": task_id,
+            "status": status,
+            "lines": lines[-tail:],
+            "build_logs": {},
+            "build_metadata": {},
+            "files_available": []
+        }
+        
+        if os.path.exists(builds_dir):
+            # List all available files
+            try:
+                build_info["files_available"] = [f for f in os.listdir(builds_dir) if os.path.isfile(os.path.join(builds_dir, f))]
+            except Exception:
+                pass
+            
+            # Load build.log (raw build output)
+            build_log_path = os.path.join(builds_dir, "build.log")
+            if os.path.exists(build_log_path):
+                try:
+                    with open(build_log_path, "r") as f:
+                        build_lines = f.readlines()
+                        build_info["build_logs"]["raw"] = [line.rstrip() for line in build_lines[-tail:]]
+                        build_info["build_logs"]["raw_total_lines"] = len(build_lines)
+                except Exception:
+                    pass
+            
+            # Load build.jsonl (structured build events)
+            build_jsonl_path = os.path.join(builds_dir, "build.jsonl")
+            if os.path.exists(build_jsonl_path):
+                try:
+                    structured_events = []
+                    with open(build_jsonl_path, "r") as f:
+                        for line in f:
+                            try:
+                                structured_events.append(json.loads(line.strip()))
+                            except Exception:
+                                pass
+                    build_info["build_logs"]["structured"] = structured_events[-tail:]
+                    build_info["build_logs"]["structured_total_events"] = len(structured_events)
+                except Exception:
+                    pass
+            
+            # Load events.log (lifecycle events)
+            events_log_path = os.path.join(builds_dir, "events.log")
+            if os.path.exists(events_log_path):
+                try:
+                    with open(events_log_path, "r") as f:
+                        event_lines = f.readlines()
+                        build_info["build_logs"]["events"] = [line.rstrip() for line in event_lines[-tail:]]
+                        build_info["build_logs"]["events_total_lines"] = len(event_lines)
+                except Exception:
+                    pass
+            
+            # Load error.log if exists
+            error_log_path = os.path.join(builds_dir, "error.log")
+            if os.path.exists(error_log_path):
+                try:
+                    with open(error_log_path, "r") as f:
+                        error_lines = f.readlines()
+                        build_info["build_logs"]["errors"] = [line.rstrip() for line in error_lines]
+                except Exception:
+                    pass
+            
+            # Load build.info.json (build summary/metadata)
+            summary_path = os.path.join(builds_dir, "build.info.json")
+            if os.path.exists(summary_path):
+                try:
+                    with open(summary_path, "r") as f:
+                        build_info["build_metadata"]["summary"] = json.load(f)
+                except Exception:
+                    pass
+            
+            # Load dockerfile.parsed.json (parsed Dockerfile info)
+            parsed_dockerfile_path = os.path.join(builds_dir, "dockerfile.parsed.json")
+            if os.path.exists(parsed_dockerfile_path):
+                try:
+                    with open(parsed_dockerfile_path, "r") as f:
+                        build_info["build_metadata"]["dockerfile_parsed"] = json.load(f)
+                except Exception:
+                    pass
+            
+            # Load Dockerfile.used (actual Dockerfile content used)
+            dockerfile_used_path = os.path.join(builds_dir, "Dockerfile.used")
+            if os.path.exists(dockerfile_used_path):
+                try:
+                    with open(dockerfile_used_path, "r") as f:
+                        build_info["build_metadata"]["dockerfile_content"] = f.read()
+                except Exception:
+                    pass
+        
+        return build_info
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

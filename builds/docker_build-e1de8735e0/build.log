@@ -1,0 +1,26 @@
+[2025-10-22 13:48:26] build initialized tag=html-site1:latest context=/tmp/docker-builds/docker_build-e1de8735e0 app_id=html-site1
+[2025-10-22 13:48:26] context prepared path=/tmp/docker-builds/docker_build-e1de8735e0 dockerfile_name=Dockerfile
+[2025-10-22 13:48:26] build starting dockerfile=Dockerfile inline=True app_id=html-site1
+[INFO ] Step 1/5 : FROM nginx:alpine
+[INFO ] 
+[INFO ]  ---> 9c92f55c0336
+[INFO ] Step 2/5 : WORKDIR /usr/share/nginx/html
+[INFO ] 
+[INFO ]  ---> Using cache
+[INFO ]  ---> 199a833e57d4
+[INFO ] Step 3/5 : RUN apk add --no-cache git && rm -rf ./* && git clone https://github.com/ikwerre-dev/html-site.git . && rm -rf .git
+[INFO ] 
+[INFO ]  ---> Using cache
+[INFO ]  ---> c71a4cb05100
+[INFO ] Step 4/5 : EXPOSE 80
+[INFO ] 
+[INFO ]  ---> Using cache
+[INFO ]  ---> b37665a512f4
+[INFO ] Step 5/5 : CMD ["nginx", "-g", "daemon off;"]
+[INFO ] 
+[INFO ]  ---> Using cache
+[INFO ]  ---> 3d5d451e50e1
+[INFO ] {'aux': {'ID': 'sha256:3d5d451e50e12982471aa71cfecaf4f9ec5583c662d29659e60423ddd9547a77'}}
+[INFO ] Successfully built 3d5d451e50e1
+[INFO ] Successfully tagged html-site1:latest
+[2025-10-22 13:48:27] build completed image_id=3d5d451e50e1 duration=1.15s app_id=html-site1

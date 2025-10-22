@@ -853,10 +853,82 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
         _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] build completed image_id={image_id or ''} duration={total_dur}s app_id={app_id or ''}")
         _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] build completed image_id={image_id or ''} duration={total_dur}s app_id={app_id or ''}")
         _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "build_completed", "image_id": image_id, "tag": tag, "duration_sec": total_dur, "app_id": app_id})
+        # Export and compress the built image
+        compressed_image_path = None
+        if task_logs_dir and image_id:
+            try:
+                import subprocess
+                import gzip
+                
+                # Export the Docker image to a tar file
+                export_start = time.time()
+                tar_path = os.path.join(task_logs_dir, f"{tag.replace(':', '_').replace('/', '_')}.tar")
+                _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] exporting image {image_id} to {tar_path}")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "image_export_start", "image_id": image_id, "tar_path": tar_path})
+                
+                # Use docker save to export the image
+                with open(tar_path, "wb") as f:
+                    image = client.images.get(image_id)
+                    for chunk in image.save():
+                        f.write(chunk)
+                
+                export_dur = round(time.time() - export_start, 3)
+                tar_size = os.path.getsize(tar_path)
+                _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] image exported size={tar_size} bytes duration={export_dur}s")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "image_exported", "tar_path": tar_path, "size_bytes": tar_size, "duration_sec": export_dur})
+                
+                # Compress with lz4 (fallback to gzip if lz4 not available)
+                compress_start = time.time()
+                compressed_path = tar_path + ".gz"
+                _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] compressing {tar_path} with lz4/gzip")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "compression_start", "input_path": tar_path, "output_path": compressed_path})
+                
+                # Try lz4 first, fallback to gzip
+                compression_method = "gzip"
+                try:
+                    # Try lz4 compression
+                    result = subprocess.run(["lz4", "-z", "-f", tar_path, compressed_path.replace('.gz', '.lz4')], 
+                                          capture_output=True, text=True, timeout=300)
+                    if result.returncode == 0:
+                        compressed_path = compressed_path.replace('.gz', '.lz4')
+                        compression_method = "lz4"
+                    else:
+                        raise Exception(f"lz4 failed: {result.stderr}")
+                except Exception as lz4_error:
+                    # Fallback to gzip compression
+                    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] lz4 failed, using gzip: {lz4_error}")
+                    with open(tar_path, "rb") as f_in:
+                        with gzip.open(compressed_path, "wb") as f_out:
+                            f_out.writelines(f_in)
+                
+                compress_dur = round(time.time() - compress_start, 3)
+                compressed_size = os.path.getsize(compressed_path)
+                compression_ratio = round((1 - compressed_size / tar_size) * 100, 1) if tar_size > 0 else 0
+                
+                _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] compression completed method={compression_method} size={compressed_size} bytes ratio={compression_ratio}% duration={compress_dur}s")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "compression_completed", 
+                                                   "method": compression_method, "compressed_path": compressed_path, 
+                                                   "compressed_size_bytes": compressed_size, "original_size_bytes": tar_size,
+                                                   "compression_ratio_percent": compression_ratio, "duration_sec": compress_dur})
+                
+                # Remove the uncompressed tar file to save space
+                try:
+                    os.remove(tar_path)
+                    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] removed uncompressed tar file {tar_path}")
+                except Exception:
+                    pass
+                
+                compressed_image_path = compressed_path
+                
+            except Exception as export_error:
+                _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] image export/compression failed: {export_error}")
+                _append_line(error_log_path, f"Image export/compression error: {export_error}")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "export_compression_error", "error": str(export_error)})
+
         # Write a summary JSON for convenience
         try:
             if task_logs_dir:
-                _write_json(summary_path, {
+                summary_data = {
                     "status": "ok",
                     "image_id": image_id,
                     "tag": tag,
@@ -866,7 +938,11 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                     "steps_detected": len(steps),
                     "app_id": app_id,
                     "build_args": build_args or {},
-                })
+                }
+                if compressed_image_path:
+                    summary_data["compressed_image_path"] = compressed_image_path
+                    summary_data["compressed_image_size_bytes"] = os.path.getsize(compressed_image_path) if os.path.exists(compressed_image_path) else 0
+                _write_json(summary_path, summary_data)
         except Exception:
             pass
         return {
