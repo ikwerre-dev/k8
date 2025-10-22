@@ -15,6 +15,7 @@ import subprocess
 import gzip
 import paramiko
 import posixpath
+import threading
 from config_service import get_log_endpoint, get_auth_header
 
 
@@ -134,6 +135,11 @@ def remove_image(tag_or_id: str, force: bool = False) -> Dict[str, Any]:
     client = get_client()
     client.images.remove(tag_or_id, force=force)
     return {"removed": True, "image": tag_or_id}
+
+
+def prune_images() -> Dict[str, Any]:
+    client = get_client()
+    return client.images.prune()
 
 
 def prune_system() -> Dict[str, Any]:
@@ -324,6 +330,7 @@ def run_container_extended(
 def local_run_from_lz4(
     lz4_path_rel: str,
     task_id: str,
+    app_id: Optional[str] = None,
     ports: Optional[Dict[str, int]] = None,
     env: Optional[Dict[str, str]] = None,
     command: Optional[str] = None,
@@ -346,6 +353,18 @@ def local_run_from_lz4(
     events_log_path = os.path.join(task_logs_dir, "events.log")
     error_log_path = os.path.join(task_logs_dir, "error.log")
     summary_path = os.path.join(task_logs_dir, "build.info.json")
+    # Prefer app_id from build.info.json over payload
+    try:
+        with open(summary_path, "r") as f:
+            _summary_obj = json.load(f)
+        if not app_id:
+            app_id = _summary_obj.get("app_id")
+        if not app_id:
+            _tag = _summary_obj.get("tag")
+            if isinstance(_tag, str) and ":" in _tag:
+                app_id = _tag.split(":", 1)[0]
+    except Exception:
+        pass
 
     def _append_line(path: Optional[str], line: str) -> None:
         if not path:
@@ -432,6 +451,18 @@ def local_run_from_lz4(
     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] image loaded id={image_id or ''} tag={image_tag or ''}")
     _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "image_loaded", "image_id": image_id, "tag": image_tag})
 
+    # Cleanup compressed artifacts to save storage
+    try:
+        if os.path.exists(lz4_abs):
+            os.remove(lz4_abs)
+        if os.path.exists(tar_path):
+            os.remove(tar_path)
+        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] cleaned compressed files")
+        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cleanup_compressed_files", "removed": [lz4_abs, tar_path]})
+    except Exception as ce:
+        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] cleanup warning {ce}")
+        _append_json(build_structured_path, {"ts": _ts(), "level": "warn", "event": "cleanup_warning", "error": str(ce)})
+
     # Stage: running
     if emit:
         emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "starting", "image_id": image_id, "tag": image_tag})
@@ -446,21 +477,44 @@ def local_run_from_lz4(
         except Exception:
             nano_cpus = None
 
+    # Generate container name using app_id and task_id if app_id is provided
+    if app_id:
+        container_name = f"{app_id}-{task_id}"
+    else:
+        container_name = name
+    # Determine internal port key from requested ports; default to 80/tcp
+    internal_port_key = None
+    if ports and isinstance(ports, dict) and ports:
+        try:
+            internal_port_key = next(iter(ports.keys()))
+        except Exception:
+            internal_port_key = None
+    internal_port_key = internal_port_key or "80/tcp"
+
     try:
+        # Ensure nginx-network exists
+        network_name = "nginx-network"
+        try:
+            existing = [n.get("name") for n in list_networks()]
+            if network_name not in existing:
+                create_network(network_name)
+        except Exception:
+            pass
         run_res = run_container_extended(
             image=image_id or (image_tag or ''),
-            name=name,
+            name=container_name,
             command=command,
-            ports=ports,
+            ports=None,
             env=env,
             mem_limit=memory,
             nano_cpus=nano_cpus,
             cpuset_cpus=cpuset,
             detach=True,
+            network=network_name,
         )
         if emit:
-            emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "completed", "container_id": run_res.get("id")})
-        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] run completed container_id={run_res.get('id')}")
+            emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "completed", "container_id": run_res.get("id"), "container_name": run_res.get("name")})
+        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] run completed container_id={run_res.get('id')} container_name={run_res.get('name')}")
         _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "run_completed", "container": run_res})
     except Exception as e:
         msg = f"run error: {e}"
@@ -478,9 +532,21 @@ def local_run_from_lz4(
                 summary = json.load(f)
         else:
             summary = {}
+        # Healthcheck planning
+        start_ts = time.time()
+        end_ts = start_ts + 15
         summary.update({
             "status": "building",
             "stage": "running",
+            "container_id": run_res.get("id"),
+            "container_name": run_res.get("name"),
+            "host_port": None,
+            "healthcheck": False,
+            "healthchecksstatus": "pending",
+            "isChecking": True,
+            "healthcheck_time": 15,
+            "start_check_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(start_ts)),
+            "end_check_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(end_ts)),
             "localrun": {
                 "lz4_path": lz4_abs,
                 "tar_path": tar_path,
@@ -491,12 +557,63 @@ def local_run_from_lz4(
                     "cpu": cpu,
                     "cpuset": cpuset,
                     "memory": memory,
-                }
+                },
+                "app_id": app_id,
+                "generated_name": container_name,
+                "ports_requested": ports,
+                "env": env,
+                "command": command,
+                "internal_port_key": internal_port_key,
+                "network": "nginx-network",
             }
         })
         _write_json(summary_path, summary)
     except Exception:
         pass
+
+    # Spawn background healthcheck after 15 seconds
+    def _do_healthcheck():
+        try:
+            # Sleep until end time
+            time.sleep(15)
+            try:
+                details = inspect_container_details(run_res.get("id"))
+                state = details.get("state") or {}
+                running = bool(state.get("Running"))
+                status_str = state.get("Status") or ("running" if running else "exited")
+            except Exception:
+                running = False
+                status_str = "error"
+            try:
+                with open(summary_path, "r") as f:
+                    s = json.load(f)
+            except Exception:
+                s = {}
+            s.update({
+                "healthcheck": running,
+                "healthchecksstatus": status_str,
+                "isChecking": False,
+                "status": "successful" if running else "failed",
+            })
+            _write_json(summary_path, s)
+            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "healthcheck_completed", "running": running, "status": status_str})
+            if emit:
+                emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "healthcheck", "healthcheck": running, "healthchecksstatus": status_str})
+        except Exception as e:
+            _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "healthcheck_error", "error": str(e)})
+            try:
+                with open(summary_path, "r") as f:
+                    s = json.load(f)
+            except Exception:
+                s = {}
+            s.update({
+                "healthcheck": False,
+                "healthchecksstatus": "error",
+                "isChecking": False,
+                "status": "failed",
+            })
+            _write_json(summary_path, s)
+    threading.Thread(target=_do_healthcheck, daemon=True).start()
 
     return {
         "status": "ok",
@@ -504,6 +621,10 @@ def local_run_from_lz4(
         "image_id": image_id,
         "tag": image_tag,
         "container": run_res,
+        "container_id": run_res.get("id"),
+        "container_name": run_res.get("name"),
+        "app_id": app_id,
+        "generated_name": container_name,
     }
 
 
@@ -577,10 +698,118 @@ def delete_in_container(id_or_name: str, path: str) -> dict:
     return {"path": path, "exit_code": res.exit_code}
 
 
+def ls_in_container(id_or_name: str, path: str = "/") -> dict:
+    client = get_client()
+    c = client.containers.get(id_or_name)
+    res = c.exec_run(f"ls -la {path}")
+    try:
+        output = res.output.decode("utf-8", errors="ignore")
+        exit_code = res.exit_code
+    except Exception:
+        exit_code = res[0] if isinstance(res, tuple) else None
+        output = res[1].decode("utf-8", errors="ignore") if isinstance(res, tuple) else ""
+    return {"path": path, "exit_code": exit_code, "output": output}
+
+
+def du_in_container(id_or_name: str, path: str = "/") -> dict:
+    client = get_client()
+    c = client.containers.get(id_or_name)
+    # Suppress permission errors and force success exit code
+    res = c.exec_run(f"sh -c 'du -sk {path} 2>/dev/null || true'")
+    try:
+        output = res.output.decode("utf-8", errors="ignore")
+        exit_code = res.exit_code
+    except Exception:
+        exit_code = res[0] if isinstance(res, tuple) else None
+        output = res[1].decode("utf-8", errors="ignore") if isinstance(res, tuple) else ""
+    size_kb = None
+    try:
+        lines = [ln for ln in output.strip().splitlines() if ln.strip()]
+        for ln in reversed(lines):
+            parts = ln.split()
+            if parts:
+                try:
+                    size_kb = int(parts[0])
+                    break
+                except Exception:
+                    continue
+    except Exception:
+        size_kb = None
+    return {"path": path, "exit_code": exit_code, "size_kb": size_kb, "output": output}
+
+
+def ls_detailed_in_container(id_or_name: str, path: str = "/", include_sizes: bool = True) -> dict:
+    client = get_client()
+    c = client.containers.get(id_or_name)
+    # List entries (excluding . and ..)
+    res = c.exec_run(f"sh -c 'ls -A1 {path} 2>/dev/null || true'")
+    try:
+        names_output = res.output.decode("utf-8", errors="ignore")
+    except Exception:
+        names_output = res[1].decode("utf-8", errors="ignore") if isinstance(res, tuple) else ""
+    names = [n for n in names_output.splitlines() if n.strip()]
+    entries = []
+    for name in names:
+        full_path = f"{path.rstrip('/')}/{name}"
+        # stat provides type, size, owner/group, perms, mtime
+        sres = c.exec_run(f"sh -c 'stat -c \"%n|%F|%s|%U|%G|%a|%y\" {full_path} 2>/dev/null || true'")
+        try:
+            sout = sres.output.decode("utf-8", errors="ignore").strip()
+        except Exception:
+            sout = sres[1].decode("utf-8", errors="ignore").strip() if isinstance(sres, tuple) else ""
+        parts = sout.split("|") if sout else []
+        entry = {
+            "name": name,
+            "path": full_path,
+            "type": parts[1] if len(parts) > 1 else None,
+            "size_bytes": int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None,
+            "owner": parts[3] if len(parts) > 3 else None,
+            "group": parts[4] if len(parts) > 4 else None,
+            "perms": parts[5] if len(parts) > 5 else None,
+            "mtime": parts[6] if len(parts) > 6 else None,
+        }
+        if include_sizes:
+            dres = c.exec_run(f"sh -c 'du -sk {full_path} 2>/dev/null || true'")
+            try:
+                dout = dres.output.decode("utf-8", errors="ignore")
+            except Exception:
+                dout = dres[1].decode("utf-8", errors="ignore") if isinstance(dres, tuple) else ""
+            try:
+                dline = [ln for ln in dout.splitlines() if ln.strip()][-1]
+                entry["size_kb"] = int(dline.split()[0])
+            except Exception:
+                entry["size_kb"] = None
+        entries.append(entry)
+    return {"path": path, "entries": entries, "count": len(entries)}
+
+
 def inspect_container_details(id_or_name: str) -> dict:
     client = get_client()
     c = client.containers.get(id_or_name)
-    info = client.api.inspect_container(c.id, size=True)
+    # Some docker SDK versions do not support 'size' kwarg
+    info = client.api.inspect_container(c.id)
+    mounts = info.get("Mounts") or []
+    # Compute root fs size via du as fallback
+    computed_root = None
+    try:
+        du_res = du_in_container(c.id, "/")
+        if isinstance(du_res, dict):
+            computed_root = du_res.get("size_kb")
+    except Exception:
+        computed_root = None
+    computed_paths = []
+    try:
+        for m in mounts:
+            dest = m.get("Destination")
+            if not dest:
+                continue
+            try:
+                du_p = du_in_container(c.id, dest)
+                computed_paths.append({"path": dest, "size_kb": du_p.get("size_kb")})
+            except Exception:
+                computed_paths.append({"path": dest, "size_kb": None})
+    except Exception:
+        pass
     return {
         "id": c.id,
         "name": c.name,
@@ -589,9 +818,10 @@ def inspect_container_details(id_or_name: str) -> dict:
         "created": info.get("Created"),
         "size_rw": info.get("SizeRw"),
         "size_root_fs": info.get("SizeRootFs"),
-        "mounts": info.get("Mounts"),
+        "mounts": mounts,
         "config": info.get("Config"),
         "network_settings": info.get("NetworkSettings"),
+        "computed": {"root_size_kb": computed_root, "paths": computed_paths},
     }
 
 # Blue-green deploy helpers and orchestration
@@ -616,6 +846,46 @@ def _extract_volumes_from_container(container) -> Dict[str, dict]:
 
 def _extract_env_from_container(container) -> Dict[str, str]:
     env_list = (container.attrs.get("Config", {}) or {}).get("Env", []) or []
+
+
+def recreate_with_added_volume(id_or_name: str, volume_name: str, mount_path: str, mode: str = "rw") -> dict:
+    client = get_client()
+    container = client.containers.get(id_or_name)
+    # Ensure volume exists
+    try:
+        client.volumes.get(volume_name)
+    except Exception:
+        client.volumes.create(name=volume_name)
+    # Extract existing mounts and env
+    volumes = _extract_volumes_from_container(container)
+    volumes[volume_name] = {"bind": mount_path, "mode": mode}
+    env = _extract_env_from_container(container)
+    cfg = container.attrs.get("Config", {}) or {}
+    cmd_list = cfg.get("Cmd")
+    command = " ".join(cmd_list) if isinstance(cmd_list, list) else (cmd_list or None)
+    image = (container.image.tags[0] if container.image.tags else container.image.id)
+    name = container.name
+    network_mode = (container.attrs.get("HostConfig", {}) or {}).get("NetworkMode")
+    # Stop and remove old container
+    try:
+        container.stop()
+    except Exception:
+        pass
+    try:
+        container.remove(force=True)
+    except Exception:
+        pass
+    # Run new container with same name and added volume
+    run_res = run_container_extended(
+        image=image,
+        name=name,
+        command=command,
+        env=env,
+        volumes=volumes,
+        network=network_mode,
+        detach=True,
+    )
+    return {"status": "recreated", "id": run_res.get("id"), "name": name, "volumes": volumes}
     env: Dict[str, str] = {}
     for e in env_list:
         if isinstance(e, str) and "=" in e:
@@ -1143,7 +1413,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                     emit({
                         "task": "docker_build",
                         "task_id": task_id,
-                        "stage": "build",
+                        "stage": "building",
                         "status": "stream",
                         "chunk": chunk,
                         "app_id": app_id,
@@ -1161,7 +1431,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 emit({
                     "task": "docker_build",
                     "task_id": task_id,
-                    "stage": "build",
+                    "stage": "building",
                     "status": "completed",
                     "image_id": image_id,
                     "tag": tag,
@@ -1251,6 +1521,17 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             try:
                 _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] starting SFTP transfer to production server")
                 _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "sftp_transfer_start", "sftp_host": sftp_host, "sftp_port": sftp_port})
+                if emit:
+                    try:
+                        emit({
+                            "task": "docker_build",
+                            "task_id": task_id,
+                            "stage": "uploading",
+                            "status": "starting",
+                            "app_id": app_id,
+                        })
+                    except Exception:
+                        pass
                 
                 sftp_result = transfer_build_to_sftp(
                     build_dir=task_logs_dir,
@@ -1269,10 +1550,34 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                                                        "remote_path": sftp_result["remote_path"], 
                                                        "files_transferred": sftp_result["files_transferred"],
                                                        "total_size_bytes": sftp_result["total_size_bytes"]})
+                    if emit:
+                        try:
+                            emit({
+                                "task": "docker_build",
+                                "task_id": task_id,
+                                "stage": "uploading",
+                                "status": "completed",
+                                "remote_path": sftp_result.get("remote_path"),
+                                "app_id": app_id,
+                            })
+                        except Exception:
+                            pass
                 else:
                     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP transfer failed: {sftp_result['error']}")
                     _append_line(error_log_path, f"SFTP transfer error: {sftp_result['error']}")
                     _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "sftp_transfer_error", "error": sftp_result["error"]})
+                    if emit:
+                        try:
+                            emit({
+                                "task": "docker_build",
+                                "task_id": task_id,
+                                "stage": "uploading",
+                                "status": "error",
+                                "error": sftp_result.get("error"),
+                                "app_id": app_id,
+                            })
+                        except Exception:
+                            pass
                     
             except Exception as sftp_error:
                 error_msg = f"SFTP transfer exception: {str(sftp_error)}"
@@ -1285,7 +1590,8 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
         try:
             if task_logs_dir:
                 summary_data = {
-                    "status": "ok",
+                    "status": "building",
+                    "stage": "uploading",
                     "image_id": image_id,
                     "tag": tag,
                     "dockerfile_used": df_arg or "Dockerfile",
@@ -1338,7 +1644,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 emit({
                     "task": "docker_build",
                     "task_id": task_id,
-                    "stage": "build",
+                    "stage": "building",
                     "status": "error",
                     "error": msg,
                     "app_id": app_id,
@@ -1368,3 +1674,10 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 os.remove(created_path)
             except Exception:
                 pass
+
+
+def start_container(id_or_name: str) -> dict:
+    client = get_client()
+    c = client.containers.get(id_or_name)
+    c.start()
+    return {"status": "ok", "id": c.id, "name": c.name}

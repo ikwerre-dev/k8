@@ -1,5 +1,6 @@
 import os
 import platform
+import subprocess
 from typing import Dict
 
 SITES_DIR = "/pxxl/sites"
@@ -18,9 +19,9 @@ def _upstream_host() -> str:
     return "127.0.0.1"
 
 
-def generate_config(domain: str, port: int) -> str:
+def generate_config(domain: str, port: int, upstream_host: str = None) -> str:
     domain = _sanitize_domain(domain)
-    upstream = _upstream_host()
+    upstream = upstream_host or _upstream_host()
 
     # Note: limit_req_zone must be declared in http context; many setups include site files inside http, so we include it here.
     # SSL certificate/key directives are omitted; ensure your global config or cert automation provides them.
@@ -60,11 +61,11 @@ server {{
 """
 
 
-def create_site(domain: str, port: int) -> Dict[str, str]:
+def create_site(domain: str, port: int, upstream_host: str = None) -> Dict[str, str]:
     os.makedirs(SITES_DIR, exist_ok=True)
     domain = _sanitize_domain(domain)
     path = os.path.join(SITES_DIR, f"{domain}.conf")
-    conf = generate_config(domain, port)
+    conf = generate_config(domain, port, upstream_host=upstream_host)
     with open(path, "w") as f:
         f.write(conf)
     return {"status": "created", "path": path, "domain": domain}
@@ -77,3 +78,25 @@ def delete_site(domain: str) -> Dict[str, str]:
         os.remove(path)
         return {"status": "deleted", "path": path, "domain": domain}
     return {"status": "not_found", "path": path, "domain": domain}
+
+
+def create_or_update_site_in_dir(app_id: str, domain: str, port: int, conf_dir: str, upstream_host: str = None) -> Dict[str, str]:
+    os.makedirs(conf_dir, exist_ok=True)
+    domain = _sanitize_domain(domain)
+    filename = f"{app_id}.conf"
+    path = os.path.join(conf_dir, filename)
+    conf = generate_config(domain, port, upstream_host=upstream_host)
+    status = "updated" if os.path.exists(path) else "created"
+    with open(path, "w") as f:
+        f.write(conf)
+    return {"status": status, "path": path, "domain": domain, "app_id": app_id, "port": str(port)}
+
+
+def reload_nginx() -> Dict[str, str]:
+    try:
+        res = subprocess.run(["nginx", "-s", "reload"], capture_output=True, text=True)
+        if res.returncode == 0:
+            return {"status": "reloaded"}
+        return {"status": "error", "returncode": str(res.returncode), "stderr": res.stderr}
+    except Exception as e:
+        return {"status": "not_available", "error": str(e)}

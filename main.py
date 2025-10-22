@@ -3,11 +3,16 @@ from pydantic import BaseModel
 from typing import Optional, Dict
 import os
 import threading
+import json
+import shutil
+import paramiko
+import posixpath
 
 import docker_service as ds
 import system_service as sys
 import nginx_service as ns
 import task_service as ts
+import db_service as db
 
 app = FastAPI(title="Docker Manager API")
 
@@ -25,10 +30,13 @@ class RunRequest(BaseModel):
     cpu: Optional[float] = None  # CPUs to allocate (e.g., 0.5, 1.0)
     cpuset: Optional[str] = None  # CPU set string, e.g., "0-2"
     memory: Optional[str] = None  # Mem limit, e.g., "512m" or "1g"
+    app_id: Optional[str] = None  # app identifier for container naming
+    task_id: Optional[str] = None  # task identifier for container naming
 
 class LocalRunRequest(BaseModel):
     lz4_path: str  # local relative path to .lz4 (or .tar.lz4)
-    build_id: str  # task/build id used for logging dir
+    task_id: str  # task/build id used for logging dir
+    app_id: Optional[str] = None  # app identifier for container naming
     ports: Optional[Dict[str, int]] = None
     env: Optional[Dict[str, str]] = None
     command: Optional[str] = None
@@ -37,170 +45,15 @@ class LocalRunRequest(BaseModel):
     cpuset: Optional[str] = None
     memory: Optional[str] = None
 
-class IdRequest(BaseModel):
-    id_or_name: str
-    force: bool = False
-
-class ExecRequest(BaseModel):
-    id_or_name: str
-    cmd: str
-
-class AuthRequest(BaseModel):
-    username: str
-    password: str
-    registry: Optional[str] = "https://index.docker.io/v1/"
-
-class TagRequest(BaseModel):
-    source: str
-    repo: str
-    tag: Optional[str] = None
-
-class PushRequest(BaseModel):
-    repo_tag: str
-
-class PullRequest(BaseModel):
-    name: str
-    tag: Optional[str] = None
-
-class SaveImageRequest(BaseModel):
-    repo_tag: str
-    tar_path: str
-
-class LoadImageRequest(BaseModel):
-    tar_path: str
-
-class VolumeCreateRequest(BaseModel):
-    name: str
-    driver: Optional[str] = "local"
-    labels: Optional[Dict[str, str]] = None
-
-class VolumeRemoveRequest(BaseModel):
-    name: str
-    force: bool = False
-
+# --- Network management ---
 class NetworkCreateRequest(BaseModel):
     name: str
     driver: Optional[str] = "bridge"
 
-class NetworkRemoveRequest(BaseModel):
-    id_or_name: str
-
-class NetworkConnectRequest(BaseModel):
-    network: str
-    container: str
-
-class KillRequest(BaseModel):
-    id_or_name: str
-    signal: Optional[str] = "SIGKILL"
-
-class UpdateResourcesRequest(BaseModel):
-    id_or_name: str
-    mem_limit: Optional[str] = None
-    nano_cpus: Optional[int] = None
-    cpu_shares: Optional[int] = None
-    pids_limit: Optional[int] = None
-    cpuset_cpus: Optional[str] = None
-    cpuset_mems: Optional[str] = None
-    memswap_limit: Optional[str] = None
-
-class RunExtendedRequest(BaseModel):
-    image: str
-    name: Optional[str] = None
-    command: Optional[str] = None
-    ports: Optional[Dict[str, int]] = None
-    env: Optional[Dict[str, str]] = None
-    volumes: Optional[Dict[str, dict]] = None
-    network: Optional[str] = None
-    mem_limit: Optional[str] = None
-    nano_cpus: Optional[int] = None
-    cpu_shares: Optional[int] = None
-    pids_limit: Optional[int] = None
-    detach: bool = True
-    log_driver: Optional[str] = None
-    log_options: Optional[Dict[str, str]] = None
-    cpuset_cpus: Optional[str] = None
-    cpuset_mems: Optional[str] = None
-    memswap_limit: Optional[str] = None
-    storage_opt: Optional[Dict[str, str]] = None
-
-class FsListRequest(BaseModel):
-    id_or_name: str
-    path: str
-
-class FsReadRequest(BaseModel):
-    id_or_name: str
-    path: str
-
-class FsWriteRequest(BaseModel):
-    id_or_name: str
-    path: str
-    content: str
-    base64: bool = False
-    mode: int = 0o644
-
-class FsMkdirRequest(BaseModel):
-    id_or_name: str
-    path: str
-
-class FsDeleteRequest(BaseModel):
-    id_or_name: str
-    path: str
-
-class BlueGreenRequest(BaseModel):
-    id_or_name: str
-    image_repo: str
-    tag: str
-    wait_seconds: int = 15
-    app_id: Optional[str] = None
-
-class NginxCreateRequest(BaseModel):
-    domain: str
-    port: int
-
-class NginxDeleteRequest(BaseModel):
-    domain: str
-
-class HtmlSitePipelineRequest(BaseModel):
-    repo_url: Optional[str] = "https://github.com/ikwerre-dev/html-site"
-    dockerhub_repo: str
-    tag: Optional[str] = "latest"
-    host_port: Optional[int] = 8080
-    dockerhub_username: Optional[str] = None
-    dockerhub_password: Optional[str] = None
-    task_id: Optional[str] = None
-
-@app.get("/")
-def root():
-    return {"Hello": f"From: {os.environ.get('ENV', 'DEFAULT_ENV')}", "service": "Docker Manager API", "docs": "/docs"}
-
-@app.post("/docker/build")
-def docker_build(req: BuildRequest):
+@app.post("/docker/network/create")
+def docker_network_create(req: NetworkCreateRequest):
     try:
-        return ds.build_image(path=req.path, tag=req.tag)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/run")
-def docker_run(req: RunRequest):
-    try:
-        # Map cpu to nano_cpus if provided
-        nano_cpus = None
-        if req.cpu is not None:
-            try:
-                nano_cpus = int(float(req.cpu) * 1_000_000_000)
-            except Exception:
-                nano_cpus = None
-        return ds.run_container_extended(
-            image=req.image,
-            name=req.name,
-            command=req.command,
-            ports=req.ports,
-            env=req.env,
-            mem_limit=req.memory,
-            nano_cpus=nano_cpus,
-            cpuset_cpus=req.cpuset,
-            detach=req.detach,
-        )
+        return ds.create_network(name=req.name, driver=req.driver or "bridge")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -209,7 +62,8 @@ def docker_localrun(req: LocalRunRequest):
     try:
         return ds.local_run_from_lz4(
             lz4_path_rel=req.lz4_path,
-            task_id=req.build_id,
+            task_id=req.task_id,
+            app_id=req.app_id,
             ports=req.ports,
             env=req.env,
             command=req.command,
@@ -221,337 +75,250 @@ def docker_localrun(req: LocalRunRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/docker/containers")
-def docker_containers(all: bool = False):
+class NginxSignDomainRequest(BaseModel):
+    domain: str
+    conf_dir: str
+    task_id: str
+    app_id: Optional[str] = None
+    old_container: Optional[str] = None
+    old_task_id: Optional[str] = None
+    new_container: Optional[str] = None
+    port: Optional[int] = None
+
+@app.post("/nginx/sign-domain")
+def nginx_sign_domain(req: NginxSignDomainRequest):
     try:
-        return ds.list_containers(all=all)
+        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
+        summary_path = os.path.join(builds_dir, "build.info.json")
+        try:
+            with open(summary_path, "r") as f:
+                summary_obj = json.load(f)
+        except Exception:
+            summary_obj = {}
+        # Infer app_id if missing
+        if not req.app_id:
+            builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
+            build_jsonl_path = os.path.join(builds_dir, "build.jsonl")
+            if os.path.exists(build_jsonl_path):
+                try:
+                    with open(build_jsonl_path, "r") as f:
+                        lines = f.readlines()
+                    for line in reversed(lines[-500:]):
+                        try:
+                            ev = json.loads(line.strip())
+                        except Exception:
+                            continue
+                        aid = ev.get("app_id")
+                        if aid:
+                            req.app_id = aid
+                            break
+                except Exception:
+                    pass
+            if not req.app_id and summary_obj and isinstance(summary_obj.get("tag"), str):
+                tag_val = summary_obj.get("tag")
+                if ":" in tag_val:
+                    req.app_id = tag_val.split(":", 1)[0]
+        if not req.app_id:
+            raise HTTPException(status_code=400, detail=f"app_id not found; provide app_id or ensure {summary_path} contains app_id")
+        # Derive container name if missing (use app_id-task_id for internal network name)
+        container_name = req.new_container or None
+        if not container_name and req.app_id and req.task_id:
+            container_name = f"{req.app_id}-{req.task_id}"
+        # Determine upstream internal port from summary localrun.internal_port_key or default 80
+        internal_port = req.port
+        if not internal_port:
+            try:
+                with open(summary_path, "r") as f:
+                    summary_obj = json.load(f)
+                localrun = (summary_obj.get("localrun", {}) or {})
+                ipk = localrun.get("internal_port_key") or "80/tcp"
+                try:
+                    internal_port = int(str(ipk).split("/", 1)[0])
+                except Exception:
+                    internal_port = 80
+            except Exception:
+                internal_port = 80
+        # Write app_id.conf targeting container name on internal network
+        site_res = ns.create_or_update_site_in_dir(req.app_id, req.domain, internal_port, req.conf_dir, upstream_host=container_name)
+        reload_res = ns.reload_nginx()
+        # Stop old container if provided, then remove it
+        old_stop = None
+        old_remove = None
+        if req.old_container:
+            try:
+                old_stop = ds.stop_container(req.old_container)
+            except Exception as e:
+                old_stop = {"error": str(e)}
+            try:
+                old_remove = ds.remove_container(req.old_container, force=True)
+            except Exception as e:
+                old_remove = {"error": str(e)}
+        elif req.old_task_id:
+            try:
+                old_builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.old_task_id)
+                old_summary_path = os.path.join(old_builds_dir, "build.info.json")
+                if os.path.exists(old_summary_path):
+                    with open(old_summary_path, "r") as f:
+                        old_summary = json.load(f)
+                    old_cid = old_summary.get("container_id") or old_summary.get("container_name")
+                    if not old_cid:
+                        old_up = (old_summary.get("upstream", {}) or {})
+                        old_cid = old_up.get("upstream_host")
+                    if old_cid:
+                        try:
+                            old_stop = ds.stop_container(old_cid)
+                        except Exception as e:
+                            old_stop = {"error": str(e)}
+                        try:
+                            old_remove = ds.remove_container(old_cid, force=True)
+                        except Exception as e:
+                            old_remove = {"error": str(e)}
+            except Exception as e:
+                old_stop = old_stop or {"error": str(e)}
+                old_remove = old_remove or {"error": str(e)}
+        # Update build.info.json: stage -> upstream, status -> completed
+        try:
+            with open(summary_path, "r") as f:
+                summary_obj = json.load(f)
+        except Exception:
+            summary_obj = {}
+        upstream_meta = {
+            "domain": req.domain,
+            "conf_path": site_res.get("path"),
+            "port": internal_port,
+            "upstream_host": container_name,
+            "nginx_reload": reload_res,
+        }
+        try:
+            summary_obj.update({
+                "stage": "upstream",
+                "status": "completed",
+                "upstream": upstream_meta,
+            })
+            # Persist application record with container_id (resolve if missing)
+            container_id = summary_obj.get("container_id")
+            if not container_id:
+                try:
+                    details = ds.inspect_container_details(container_name)
+                    container_id = details.get("id")
+                except Exception:
+                    container_id = None
+            try:
+                db.upsert_application(req.app_id, container_id)
+            except Exception:
+                pass
+            with open(summary_path, "w") as f:
+                json.dump(summary_obj, f, indent=2)
+        except Exception:
+            pass
+        # Prune dangling images (images only)
+        images_prune = None
+        try:
+            images_prune = ds.prune_images()
+        except Exception as e:
+            images_prune = {"error": str(e)}
+        return {
+            "stage": "upstream",
+            "status": "completed",
+            "domain": req.domain,
+            "app_id": req.app_id,
+            "conf_path": site_res.get("path"),
+            "port": internal_port,
+            "upstream_host": container_name,
+            "nginx_reload": reload_res,
+            "old_stop": old_stop,
+            "old_remove": old_remove,
+            "images_prune": images_prune,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/docker/images")
-def docker_images():
-    try:
-        return ds.list_images()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# --- Update app and container port ---
+class UpdatePortRequest(BaseModel):
+    task_id: str
+    new_port: int
+    conf_dir: str
+    domain: str
 
-@app.post("/docker/stop")
-def docker_stop(req: IdRequest):
+@app.post("/app/update-port")
+def app_update_port(req: UpdatePortRequest):
     try:
-        return ds.stop_container(req.id_or_name)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/rm")
-def docker_rm(req: IdRequest):
-    try:
-        return ds.remove_container(req.id_or_name, force=req.force)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/rmi")
-def docker_rmi(req: IdRequest):
-    try:
-        return ds.remove_image(req.id_or_name, force=req.force)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/prune")
-def docker_prune():
-    try:
-        return ds.prune_system()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/docker/logs/{id_or_name}")
-def docker_logs(id_or_name: str, tail: int = 100):
-    try:
-        return ds.container_logs(id_or_name, tail=tail)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/exec")
-def docker_exec(req: ExecRequest):
-    try:
-        return ds.exec_in_container(req.id_or_name, req.cmd)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/login")
-def docker_login(req: AuthRequest):
-    try:
-        return ds.login(req.username, req.password, req.registry)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/tag")
-def docker_tag(req: TagRequest):
-    try:
-        return ds.tag_image(req.source, req.repo, req.tag)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/push")
-def docker_push(req: PushRequest):
-    try:
-        return ds.push_image(req.repo_tag)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/pull")
-def docker_pull(req: PullRequest):
-    try:
-        return ds.pull_image(req.name, req.tag)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/save")
-def docker_save(req: SaveImageRequest):
-    try:
-        return ds.save_image(req.repo_tag, req.tar_path)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/load")
-def docker_load(req: LoadImageRequest):
-    try:
-        return ds.load_image(req.tar_path)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/volume/create")
-def volume_create(req: VolumeCreateRequest):
-    try:
-        return ds.create_volume(req.name, driver=req.driver, labels=req.labels)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/docker/volume/list")
-def volume_list():
-    try:
-        return ds.list_volumes()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/volume/remove")
-def volume_remove(req: VolumeRemoveRequest):
-    try:
-        return ds.remove_volume(req.name, force=req.force)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/network/create")
-def network_create(req: NetworkCreateRequest):
-    try:
-        return ds.create_network(req.name, driver=req.driver)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/docker/network/list")
-def network_list():
-    try:
-        return ds.list_networks()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/network/remove")
-def network_remove(req: NetworkRemoveRequest):
-    try:
-        return ds.remove_network(req.id_or_name)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/network/connect")
-def network_connect(req: NetworkConnectRequest):
-    try:
-        return ds.connect_network(req.network, req.container)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/network/disconnect")
-def network_disconnect(req: NetworkConnectRequest):
-    try:
-        return ds.disconnect_network(req.network, req.container)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/container/restart")
-def container_restart(req: IdRequest):
-    try:
-        return ds.restart_container(req.id_or_name)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/container/pause")
-def container_pause(req: IdRequest):
-    try:
-        return ds.pause_container(req.id_or_name)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/container/unpause")
-def container_unpause(req: IdRequest):
-    try:
-        return ds.unpause_container(req.id_or_name)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/container/kill")
-def container_kill(req: KillRequest):
-    try:
-        return ds.kill_container(req.id_or_name, signal=req.signal)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/container/update")
-def container_update(req: UpdateResourcesRequest):
-    try:
-        return ds.update_container_resources(
-            req.id_or_name,
-            mem_limit=req.mem_limit,
-            nano_cpus=req.nano_cpus,
-            cpu_shares=req.cpu_shares,
-            pids_limit=req.pids_limit,
-            cpuset_cpus=req.cpuset_cpus,
-            cpuset_mems=req.cpuset_mems,
-            memswap_limit=req.memswap_limit,
+        # Load build summary
+        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
+        summary_path = os.path.join(builds_dir, "build.info.json")
+        if not os.path.exists(summary_path):
+            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
+        with open(summary_path, "r") as f:
+            summary_obj = json.load(f)
+        localrun = summary_obj.get("localrun", {}) or {}
+        app_id = localrun.get("app_id") or summary_obj.get("app_id")
+        current_id = summary_obj.get("container_id") or summary_obj.get("container_name")
+        name = summary_obj.get("container_name")
+        internal_port_key = localrun.get("internal_port_key") or "80/tcp"
+        image = localrun.get("image_tag") or localrun.get("image_id")
+        env = localrun.get("env")
+        resources = localrun.get("resources", {}) or {}
+        cpu = resources.get("cpu")
+        cpuset = resources.get("cpuset")
+        memory = resources.get("memory")
+        # Stop and remove old container
+        stop_result = None
+        rm_result = None
+        try:
+            if current_id:
+                stop_result = ds.stop_container(current_id)
+        except Exception as e:
+            stop_result = {"error": str(e)}
+        try:
+            if current_id:
+                rm_result = ds.remove_container(current_id, force=True)
+        except Exception as e:
+            rm_result = {"error": str(e)}
+        # Re-run container with new port mapping
+        ports = {internal_port_key: req.new_port}
+        run_res = ds.run_container_extended(
+            image=image,
+            name=name,
+            ports=ports,
+            env=env,
+            mem_limit=memory,
+            nano_cpus=int(float(cpu) * 1_000_000_000) if isinstance(cpu, (int, float, str)) and str(cpu) else None,
+            cpuset_cpus=cpuset,
+            detach=True,
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/docker/container/stats/{id_or_name}")
-def container_stats(id_or_name: str):
-    try:
-        return ds.get_container_stats(id_or_name)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/docker/container/top/{id_or_name}")
-def container_top(id_or_name: str):
-    try:
-        return ds.top_processes(id_or_name)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/run-extended")
-def docker_run_extended(req: RunExtendedRequest):
-    try:
-        return ds.run_container_extended(
-            image=req.image,
-            name=req.name,
-            command=req.command,
-            ports=req.ports,
-            env=req.env,
-            volumes=req.volumes,
-            network=req.network,
-            mem_limit=req.mem_limit,
-            nano_cpus=req.nano_cpus,
-            cpu_shares=req.cpu_shares,
-            pids_limit=req.pids_limit,
-            detach=req.detach,
-            log_driver=req.log_driver,
-            log_options=req.log_options,
-            cpuset_cpus=req.cpuset_cpus,
-            cpuset_mems=req.cpuset_mems,
-            memswap_limit=req.memswap_limit,
-            storage_opt=req.storage_opt,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/system/info")
-def system_info():
-    try:
-        return sys.get_system_info()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/system/usage")
-def system_usage():
-    try:
-        return sys.get_resource_usage()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/system/top")
-def system_top(sort: str = "cpu", limit: int = 10):
-    try:
-        return sys.top_processes(sort_by=sort, limit=limit)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/container/fs/list")
-def container_fs_list(req: FsListRequest):
-    try:
-        return ds.list_path_in_container(req.id_or_name, req.path)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/container/fs/read")
-def container_fs_read(req: FsReadRequest):
-    try:
-        return ds.read_file_in_container(req.id_or_name, req.path)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/container/fs/write")
-def container_fs_write(req: FsWriteRequest):
-    try:
-        data = req.content
-        if req.base64:
-            import base64
-            content_bytes = base64.b64decode(data)
-        else:
-            content_bytes = data.encode("utf-8")
-        return ds.write_file_in_container(req.id_or_name, req.path, content_bytes, mode=req.mode)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/container/fs/mkdir")
-def container_fs_mkdir(req: FsMkdirRequest):
-    try:
-        return ds.mkdir_in_container(req.id_or_name, req.path)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/container/fs/delete")
-def container_fs_delete(req: FsDeleteRequest):
-    try:
-        return ds.delete_in_container(req.id_or_name, req.path)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/docker/container/inspect/{id_or_name}")
-def container_inspect(id_or_name: str):
-    try:
-        return ds.inspect_container_details(id_or_name)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/deploy/blue-green")
-def deploy_blue_green(req: BlueGreenRequest):
-    try:
-        return ds.blue_green_deploy(
-            base_id_or_name=req.id_or_name,
-            image_repo=req.image_repo,
-            tag=req.tag,
-            wait_seconds=req.wait_seconds,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/nginx/site/create")
-def nginx_site_create(req: NginxCreateRequest):
-    try:
-        return ns.create_site(req.domain, req.port)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/nginx/site/delete")
-def nginx_site_delete(req: NginxDeleteRequest):
-    try:
-        return ns.delete_site(req.domain)
+        # Update summary with new port and container info
+        try:
+            summary_obj.update({
+                "container_id": run_res.get("id"),
+                "container_name": run_res.get("name"),
+                "host_port": req.new_port,
+                "localrun": {
+                    **localrun,
+                    "ports_requested": ports,
+                }
+            })
+            with open(summary_path, "w") as f:
+                json.dump(summary_obj, f, indent=2)
+        except Exception:
+            pass
+        # Update nginx config to point to new port
+        site_res = ns.create_or_update_site_in_dir(app_id, req.domain, req.new_port, req.conf_dir)
+        reload_res = ns.reload_nginx()
+        return {
+            "stage": "update_port",
+            "status": "completed",
+            "task_id": req.task_id,
+            "app_id": app_id,
+            "domain": req.domain,
+            "conf_path": site_res.get("path"),
+            "new_port": req.new_port,
+            "container": run_res,
+            "stop": stop_result,
+            "remove": rm_result,
+            "nginx_reload": reload_res,
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -580,7 +347,6 @@ def docker_build_start(req: BuildStartRequest):
             if req.app_id:
                 ev["app_id"] = req.app_id
             emit_event(task_id, ev)
-
         # Use a temp context so the inline Dockerfile writes in isolation
         tmp_dir = f"/tmp/docker-builds/{task_id}"
         tag = req.tag or (f"{req.app_id}:latest" if req.app_id else None)
@@ -655,78 +421,31 @@ def tasks_run_stream(req: TaskRunStreamRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class HtmlSitePipelineRequest(BaseModel):
+    repo_url: Optional[str] = "https://github.com/ikwerre-dev/html-site"
+    dockerhub_repo: str
+    tag: Optional[str] = "latest"
+    host_port: Optional[int] = 8080
+    dockerhub_username: Optional[str] = None
+    dockerhub_password: Optional[str] = None
+    task_id: Optional[str] = None
+
 @app.post("/pipeline/html-site")
 def pipeline_html_site(req: HtmlSitePipelineRequest):
     try:
         from pipeline_service import run_html_site_pipeline
-
-        # Print each pipeline stage to the terminal for immediate feedback
-        def _emit(ev):
-            try:
-                stage = ev.get("stage")
-                status = ev.get("status")
-                err = ev.get("error")
-                extra = []
-                if "exit_code" in ev:          
-                    extra.append(f"exit_code={ev['exit_code']}")
-                if "container_id" in ev:
-                    extra.append(f"container_id={ev['container_id']}")
-                if "status_code" in ev:
-                    extra.append(f"status_code={ev['status_code']}")
-                if err:
-                    extra.append(f"error={err}")
-                suffix = (" " + " ".join(extra)) if extra else ""
-                print(f"[PIPELINE] {stage or ''} {status or ''}{suffix}")
-            except Exception:
-                pass
-
         return run_html_site_pipeline(
-            repo_url=req.repo_url,
+            repo_url=req.repo_url or "https://github.com/ikwerre-dev/html-site",
             dockerhub_repo=req.dockerhub_repo,
             tag=req.tag or "latest",
             host_port=req.host_port or 8080,
             dockerhub_username=req.dockerhub_username,
             dockerhub_password=req.dockerhub_password,
             task_id=req.task_id,
-            emit=_emit,
-        ) 
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/pipeline/html-site/start")
-def pipeline_html_site_start(req: HtmlSitePipelineRequest):
-    try:
-        from task_registry import create_task, emit_event, set_completed, set_error
-        from pipeline_service import run_html_site_pipeline
-
-        task_id = create_task("html_site_pipeline")
-
-        def _emit(ev):
-            ev["task_id"] = task_id
-            emit_event(task_id, ev)
-
-        def _runner():
-            try:
-                result = run_html_site_pipeline(
-                    repo_url=req.repo_url or "https://github.com/ikwerre-dev/html-site",
-                    dockerhub_repo=req.dockerhub_repo,
-                    tag=req.tag or "latest",
-                    host_port=req.host_port or 8080,
-                    dockerhub_username=req.dockerhub_username,
-                    dockerhub_password=req.dockerhub_password,
-                    task_id=task_id,
-                    emit=_emit,
-                )
-                set_completed(task_id, result)
-            except Exception as e:
-                set_error(task_id, str(e))
-
-        t = threading.Thread(target=_runner, daemon=True)
-        t.start()
-
-        return {"task_id": task_id, "status": "started"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/tasks/logs/{task_id}")
 def tasks_logs(task_id: str, tail: int = 200):
@@ -736,16 +455,6 @@ def tasks_logs(task_id: str, tail: int = 200):
         
         # Get task registry info
         t = get(task_id)
-        events = t.get("events", []) if isinstance(t, dict) else []
-        lines = []
-        for ev in events:
-            chunk = ev.get("chunk")
-            if chunk is not None:
-                if isinstance(chunk, dict):
-                    line = chunk.get("stream") or chunk.get("status") or str(chunk)
-                else:
-                    line = str(chunk)
-                lines.append(line)
         status = t.get("status") if isinstance(t, dict) else "unknown"
         
         # Enhanced: Load comprehensive build information from builds directory
@@ -753,7 +462,6 @@ def tasks_logs(task_id: str, tail: int = 200):
         build_info = {
             "task_id": task_id,
             "status": status,
-            "lines": lines[-tail:],
             "build_logs": {},
             "build_metadata": {},
             "files_available": []
@@ -777,49 +485,18 @@ def tasks_logs(task_id: str, tail: int = 200):
                 except Exception:
                     pass
             
-            # Load build.jsonl (structured build events)
-            build_jsonl_path = os.path.join(builds_dir, "build.jsonl")
-            if os.path.exists(build_jsonl_path):
-                try:
-                    structured_events = []
-                    with open(build_jsonl_path, "r") as f:
-                        for line in f:
-                            try:
-                                structured_events.append(json.loads(line.strip()))
-                            except Exception:
-                                pass
-                    build_info["build_logs"]["structured"] = structured_events[-tail:]
-                    build_info["build_logs"]["structured_total_events"] = len(structured_events)
-                except Exception:
-                    pass
-            
-            # Load events.log (lifecycle events)
-            events_log_path = os.path.join(builds_dir, "events.log")
-            if os.path.exists(events_log_path):
-                try:
-                    with open(events_log_path, "r") as f:
-                        event_lines = f.readlines()
-                        build_info["build_logs"]["events"] = [line.rstrip() for line in event_lines[-tail:]]
-                        build_info["build_logs"]["events_total_lines"] = len(event_lines)
-                except Exception:
-                    pass
-            
-            # Load error.log if exists
-            error_log_path = os.path.join(builds_dir, "error.log")
-            if os.path.exists(error_log_path):
-                try:
-                    with open(error_log_path, "r") as f:
-                        error_lines = f.readlines()
-                        build_info["build_logs"]["errors"] = [line.rstrip() for line in error_lines]
-                except Exception:
-                    pass
-            
             # Load build.info.json (build summary/metadata)
             summary_path = os.path.join(builds_dir, "build.info.json")
             if os.path.exists(summary_path):
                 try:
                     with open(summary_path, "r") as f:
-                        build_info["build_metadata"]["summary"] = json.load(f)
+                        summary_obj = json.load(f)
+                        build_info["build_metadata"]["summary"] = summary_obj
+                        # Override/augment top-level fields from summary
+                        build_info["status"] = summary_obj.get("status", build_info["status"])
+                        for key in ["healthcheck", "healthchecksstatus", "isChecking", "healthcheck_time", "start_check_time", "end_check_time"]:
+                            if key in summary_obj:
+                                build_info[key] = summary_obj[key]
                 except Exception:
                     pass
             
@@ -860,3 +537,471 @@ async def log_requests(request: Request, call_next):
     response = await call_next(request)
     print(f"[HTTP] {response.status_code} {request.method} {request.url.path}")
     return response
+
+
+class ContainerControlRequest(BaseModel):
+    task_id: str
+
+@app.post("/docker/container/start")
+def docker_container_start(req: ContainerControlRequest):
+    try:
+        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
+        summary_path = os.path.join(builds_dir, "build.info.json")
+        if not os.path.exists(summary_path):
+            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
+        with open(summary_path, "r") as f:
+            summary_obj = json.load(f)
+        cid = summary_obj.get("container_id") or summary_obj.get("container_name")
+        if not cid:
+            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
+        res = ds.start_container(cid)
+        # update status watch metadata
+        summary_obj.update({
+            "stage": "container_start",
+            "status": "completed",
+            "status_watch": {"enabled": True, "interval_sec": 15}
+        })
+        with open(summary_path, "w") as f:
+            json.dump(summary_obj, f, indent=2)
+        return {"task_id": req.task_id, "container": res}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/docker/container/restart")
+def docker_container_restart(req: ContainerControlRequest):
+    try:
+        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
+        summary_path = os.path.join(builds_dir, "build.info.json")
+        if not os.path.exists(summary_path):
+            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
+        with open(summary_path, "r") as f:
+            summary_obj = json.load(f)
+        cid = summary_obj.get("container_id") or summary_obj.get("container_name")
+        if not cid:
+            upstream = (summary_obj.get("upstream", {}) or {})
+            cid = upstream.get("upstream_host")
+        if not cid:
+            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
+        stop_res = None
+        start_res = None
+        try:
+            stop_res = ds.stop_container(cid)
+        except Exception as e:
+            stop_res = {"error": str(e)}
+        try:
+            start_res = ds.start_container(cid)
+        except Exception as e:
+            start_res = {"error": str(e)}
+        return {"task_id": req.task_id, "stop": stop_res, "start": start_res}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/docker/container/stop")
+def docker_container_stop(req: ContainerControlRequest):
+    try:
+        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
+        summary_path = os.path.join(builds_dir, "build.info.json")
+        if not os.path.exists(summary_path):
+            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
+        with open(summary_path, "r") as f:
+            summary_obj = json.load(f)
+        cid = summary_obj.get("container_id") or summary_obj.get("container_name")
+        if not cid:
+            upstream = (summary_obj.get("upstream", {}) or {})
+            cid = upstream.get("upstream_host")
+        if not cid:
+            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
+        details = ds.inspect_container_details(cid)
+        state = details.get("state") or {}
+        running = bool(state.get("Running"))
+        return {
+            "task_id": req.task_id,
+            "container": {
+                "id": details.get("id"),
+                "name": details.get("name"),
+                "running": running,
+                "state": state,
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/docker/container/status")
+def docker_container_status(req: ContainerControlRequest):
+    try:
+        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
+        summary_path = os.path.join(builds_dir, "build.info.json")
+        if not os.path.exists(summary_path):
+            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
+        with open(summary_path, "r") as f:
+            summary_obj = json.load(f)
+        cid = summary_obj.get("container_id") or summary_obj.get("container_name")
+        if not cid:
+            upstream = (summary_obj.get("upstream", {}) or {})
+            cid = upstream.get("upstream_host")
+        if not cid:
+            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
+        details = ds.inspect_container_details(cid)
+        state = details.get("state") or {}
+        running = bool(state.get("Running"))
+        return {
+            "task_id": req.task_id,
+            "container": {
+                "id": details.get("id"),
+                "name": details.get("name"),
+                "running": running,
+                "state": state,
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/docker/container/stop")
+def docker_container_stop(req: ContainerControlRequest):
+    try:
+        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
+        summary_path = os.path.join(builds_dir, "build.info.json")
+        if not os.path.exists(summary_path):
+            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
+        with open(summary_path, "r") as f:
+            summary_obj = json.load(f)
+        cid = summary_obj.get("container_id") or summary_obj.get("container_name")
+        if not cid:
+            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
+        res = ds.stop_container(cid)
+        summary_obj.update({
+            "stage": "container_stop",
+            "status": "completed"
+        })
+        with open(summary_path, "w") as f:
+            json.dump(summary_obj, f, indent=2)
+        return {"task_id": req.task_id, "container": res}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Initialize DB and metrics watcher at startup
+try:
+    db.init_db()
+except Exception:
+    pass
+
+_metrics_stop_event = threading.Event()
+
+def _cpu_percent(stats: dict) -> float:
+    try:
+        cpu = stats.get("cpu_stats", {})
+        precpu = stats.get("precpu_stats", {})
+        cpu_delta = float(cpu.get("cpu_usage", {}).get("total_usage", 0)) - float(precpu.get("cpu_usage", {}).get("total_usage", 0))
+        system_delta = float(cpu.get("system_cpu_usage", 0)) - float(precpu.get("system_cpu_usage", 0))
+        cores = max(1, int(cpu.get("online_cpus") or len(cpu.get("cpu_usage", {}).get("percpu_usage", []) or [0])))
+        if system_delta > 0 and cpu_delta > 0:
+            return round((cpu_delta / system_delta) * cores * 100.0, 2)
+        return 0.0
+    except Exception:
+        return 0.0
+
+def _mem_usage(stats: dict) -> int:
+    try:
+        mem = stats.get("memory_stats", {})
+        return int(mem.get("usage") or 0)
+    except Exception:
+        return 0
+
+def _metrics_watcher_loop():
+    while not _metrics_stop_event.is_set():
+        try:
+            apps = db.list_applications()
+            for app in apps:
+                cid = app.get("container_id")
+                aid = app.get("app_id")
+                if not cid:
+                    continue
+                try:
+                    s = ds.get_container_stats(cid)
+                    cpu = _cpu_percent(s)
+                    ram = _mem_usage(s)
+                    db.add_metric(aid, cpu=cpu, ram=ram)
+                except Exception:
+                    # ignore stats errors
+                    pass
+        except Exception:
+            pass
+        _metrics_stop_event.wait(15)
+
+try:
+    threading.Thread(target=_metrics_watcher_loop, daemon=True).start()
+except Exception:
+    pass
+
+
+class MetricsQuery(BaseModel):
+    app_id: str
+    limit: Optional[int] = 200
+
+@app.post("/metrics/query")
+def metrics_query(req: MetricsQuery):
+    try:
+        data = db.get_metrics(req.app_id, limit=req.limit or 200)
+        return {"app_id": req.app_id, "metrics": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class BuildDeleteRequest(BaseModel):
+    task_id: str
+    sftp_username: Optional[str] = None
+    sftp_password: Optional[str] = None
+
+@app.post("/build/delete")
+def build_delete(req: BuildDeleteRequest):
+    try:
+        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
+        summary_path = os.path.join(builds_dir, "build.info.json")
+        if not os.path.exists(summary_path):
+            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
+        with open(summary_path, "r") as f:
+            summary_obj = json.load(f)
+        # Resolve container id/name
+        cid = summary_obj.get("container_id") or summary_obj.get("container_name")
+        upstream = (summary_obj.get("upstream", {}) or {})
+        if not cid:
+            cid = upstream.get("upstream_host")
+        stop_res = None
+        rm_res = None
+        if cid:
+            try:
+                stop_res = ds.stop_container(cid)
+            except Exception as e:
+                stop_res = {"error": str(e)}
+            try:
+                rm_res = ds.remove_container(cid, force=True)
+            except Exception as e:
+                rm_res = {"error": str(e)}
+        # Resolve image tag or id
+        image_id = (summary_obj.get("localrun", {}) or {}).get("image_id") or summary_obj.get("image_id")
+        image_tag = (summary_obj.get("localrun", {}) or {}).get("image_tag") or summary_obj.get("tag")
+        img_ref = image_tag or image_id
+        rmi_res = None
+        if img_ref:
+            try:
+                rmi_res = ds.remove_image(img_ref, force=True)
+            except Exception as e:
+                rmi_res = {"error": str(e)}
+        # Delete remote SFTP build directory if info is present and credentials provided
+        sftp_res = {"status": "skipped"}
+        sftp_info = summary_obj.get("sftp_deployment") or {}
+        remote_path = sftp_info.get("remote_path")
+        sftp_host = sftp_info.get("sftp_host")
+        sftp_port = sftp_info.get("sftp_port") or 22
+        if remote_path and sftp_host and req.sftp_username:
+            ssh = None
+            sftp = None
+            try:
+                ssh = paramiko.SSHClient()
+                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                ssh.connect(hostname=sftp_host, port=int(sftp_port), username=req.sftp_username, password=req.sftp_password, timeout=30)
+                sftp = ssh.open_sftp()
+                def _rmtree(path: str):
+                    try:
+                        for entry in sftp.listdir_attr(path):
+                            child = posixpath.join(path, entry.filename)
+                            # Best-effort directory detection: try stat and rmdir; if fails, remove as file
+                            try:
+                                sftp.listdir(child)
+                                _rmtree(child)
+                                sftp.rmdir(child)
+                            except IOError:
+                                try:
+                                    sftp.remove(child)
+                                except Exception:
+                                    pass
+                        sftp.rmdir(path)
+                    except IOError:
+                        return
+                _rmtree(remote_path)
+                sftp.close()
+                ssh.close()
+                sftp_res = {"status": "success", "remote_path": remote_path}
+            except Exception as e:
+                sftp_res = {"status": "error", "error": str(e), "remote_path": remote_path}
+            finally:
+                try:
+                    if sftp:
+                        sftp.close()
+                except Exception:
+                    pass
+                try:
+                    if ssh:
+                        ssh.close()
+                except Exception:
+                    pass
+        # Delete local build directory
+        local_delete = None
+        try:
+            if os.path.exists(builds_dir):
+                shutil.rmtree(builds_dir)
+                local_delete = {"deleted": True, "path": builds_dir}
+            else:
+                local_delete = {"deleted": False, "path": builds_dir}
+        except Exception as e:
+            local_delete = {"error": str(e), "path": builds_dir}
+        return {
+            "task_id": req.task_id,
+            "stop": stop_res,
+            "remove": rm_res,
+            "rmi": rmi_res,
+            "sftp_delete": sftp_res,
+            "local_delete": local_delete,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class VolumeCreateRequest(BaseModel):
+    name: str
+    driver: Optional[str] = "local"
+    labels: Optional[Dict[str, str]] = None
+
+@app.post("/docker/volume/create")
+def docker_volume_create(req: VolumeCreateRequest):
+    try:
+        return ds.create_volume(req.name, driver=req.driver or "local", labels=req.labels)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/docker/volume/list")
+def docker_volume_list():
+    try:
+        return {"volumes": ds.list_volumes()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class VolumeRemoveRequest(BaseModel):
+    name: str
+    force: Optional[bool] = False
+
+@app.post("/docker/volume/remove")
+def docker_volume_remove(req: VolumeRemoveRequest):
+    try:
+        return ds.remove_volume(req.name, force=bool(req.force))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ContainerFsRequest(BaseModel):
+    task_id: str
+    path: Optional[str] = "/"
+
+class ContainerVolumeAddRequest(BaseModel):
+    task_id: str 
+    volume_name: str
+    mount_path: str
+    mode: Optional[str] = "rw"
+
+@app.post("/docker/container/volume/add")
+def docker_container_volume_add(req: ContainerVolumeAddRequest):
+    try:
+        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
+        summary_path = os.path.join(builds_dir, "build.info.json")
+        if not os.path.exists(summary_path):
+            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
+        with open(summary_path, "r") as f:
+            summary_obj = json.load(f)
+        cid = summary_obj.get("container_id") or summary_obj.get("container_name")
+        if not cid:
+            upstream = (summary_obj.get("upstream", {}) or {})
+            cid = upstream.get("upstream_host")
+        if not cid:
+            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
+        res = ds.recreate_with_added_volume(cid, req.volume_name, req.mount_path, req.mode or "rw")
+        try:
+            summary_obj["container_id"] = res.get("id") or summary_obj.get("container_id")
+            vols = summary_obj.get("volumes") or []
+            vols.append({"name": req.volume_name, "mount": req.mount_path, "mode": req.mode or "rw"})
+            summary_obj["volumes"] = vols
+            with open(summary_path, "w") as f:
+                json.dump(summary_obj, f, indent=2)
+        except Exception:
+            pass
+        return {"task_id": req.task_id, **res}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Update ls endpoint to return structured entries with sizes
+@app.post("/docker/container/ls")
+def docker_container_ls(req: ContainerFsRequest):
+    try:
+        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
+        summary_path = os.path.join(builds_dir, "build.info.json")
+        if not os.path.exists(summary_path):
+            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
+        with open(summary_path, "r") as f:
+            summary_obj = json.load(f)
+        cid = summary_obj.get("container_id") or summary_obj.get("container_name")
+        if not cid:
+            upstream = (summary_obj.get("upstream", {}) or {})
+            cid = upstream.get("upstream_host")
+        if not cid:
+            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
+        res = ds.ls_detailed_in_container(cid, req.path or "/", include_sizes=True)
+        return {"task_id": req.task_id, **res}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/docker/container/du")
+def docker_container_du(req: ContainerFsRequest):
+    try:
+        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
+        summary_path = os.path.join(builds_dir, "build.info.json")
+        if not os.path.exists(summary_path):
+            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
+        with open(summary_path, "r") as f:
+            summary_obj = json.load(f)
+        cid = summary_obj.get("container_id") or summary_obj.get("container_name")
+        if not cid:
+            upstream = (summary_obj.get("upstream", {}) or {})
+            cid = upstream.get("upstream_host")
+        if not cid:
+            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
+        res = ds.du_in_container(cid, req.path or "/")
+        return {"task_id": req.task_id, **res}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/docker/container/usage")
+def docker_container_usage(req: ContainerControlRequest):
+    try:
+        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
+        summary_path = os.path.join(builds_dir, "build.info.json")
+        if not os.path.exists(summary_path):
+            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
+        with open(summary_path, "r") as f:
+            summary_obj = json.load(f)
+        cid = summary_obj.get("container_id") or summary_obj.get("container_name")
+        if not cid:
+            upstream = (summary_obj.get("upstream", {}) or {})
+            cid = upstream.get("upstream_host")
+        if not cid:
+            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
+        info = ds.inspect_container_details(cid)
+        return {"task_id": req.task_id, "id": info.get("id"), "name": info.get("name"), "size_rw": info.get("size_rw"), "size_root_fs": info.get("size_root_fs"), "mounts": info.get("mounts"), "state": info.get("state"), "computed": info.get("computed")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
