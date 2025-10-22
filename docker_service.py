@@ -350,7 +350,7 @@ def local_run_from_lz4(
     Keeps summary status as 'building'.
     """
     client = get_client()
-    base_logs_dir = os.path.abspath(os.path.join("/upload/pxxl"))
+    base_logs_dir = os.path.abspath(os.path.join("/pxxl/upload"))
     task_logs_dir = os.path.join(base_logs_dir, task_id)
     os.makedirs(task_logs_dir, exist_ok=True)
     build_log_path = os.path.join(task_logs_dir, "build.log")
@@ -1544,7 +1544,7 @@ def blue_green_deploy(base_id_or_name: str, image_repo: str, tag: str, wait_seco
 
 def transfer_build_to_sftp(build_dir: str, task_id: str, sftp_host: str, sftp_username: str, sftp_password: Optional[str] = None, sftp_port: int = 22, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None) -> Dict[str, Any]:
     """
-    Transfer the entire build directory to SFTP server at /upload/pxxl/applications/{task_id}
+    Transfer the entire build directory to SFTP server at /pxxl/upload/applications/{task_id}
     """
     def _emit_log(message: str, level: str = "info"):
         if emit:
@@ -1579,7 +1579,7 @@ def transfer_build_to_sftp(build_dir: str, task_id: str, sftp_host: str, sftp_us
         sftp = ssh.open_sftp()
         
         # Create remote directory path
-        remote_base_dir = "/upload/pxxl/applications"
+        remote_base_dir = "/pxxl/upload/applications"
         remote_dir = f"{remote_base_dir}/{task_id}"
         
         _emit_log(f"Ensuring remote directory exists: {remote_dir}")

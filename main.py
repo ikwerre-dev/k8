@@ -95,7 +95,7 @@ class NginxSignDomainRequest(BaseModel):
 @app.post("/nginx/sign-domain")
 def nginx_sign_domain(req: NginxSignDomainRequest):
     try:
-        builds_dir = os.path.join("/upload/pxxl", req.task_id)
+        builds_dir = os.path.join("/pxxl/upload", req.task_id)
         summary_path = os.path.join(builds_dir, "build.info.json")
         try:
             with open(summary_path, "r") as f:
@@ -104,7 +104,7 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
             summary_obj = {}
         # Infer app_id if missing
         if not req.app_id:
-            builds_dir = os.path.join("/upload/pxxl", req.task_id)
+            builds_dir = os.path.join("/pxxl/upload", req.task_id)
             build_jsonl_path = os.path.join(builds_dir, "build.jsonl")
             if os.path.exists(build_jsonl_path):
                 try:
@@ -162,7 +162,7 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
                 old_remove = {"error": str(e)}
         elif req.old_task_id:
             try:
-                old_builds_dir = os.path.join("/upload/pxxl", req.old_task_id)
+                old_builds_dir = os.path.join("/pxxl/upload", req.old_task_id)
                 old_summary_path = os.path.join(old_builds_dir, "build.info.json")
                 if os.path.exists(old_summary_path):
                     with open(old_summary_path, "r") as f:
@@ -251,7 +251,7 @@ class UpdatePortRequest(BaseModel):
 def app_update_port(req: UpdatePortRequest):
     try:
         # Load build summary
-        builds_dir = os.path.join("/upload/pxxl", req.task_id)
+        builds_dir = os.path.join("/pxxl/upload", req.task_id)
         summary_path = os.path.join(builds_dir, "build.info.json")
         if not os.path.exists(summary_path):
             raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
@@ -262,7 +262,7 @@ def app_update_port(req: UpdatePortRequest):
         current_id = summary_obj.get("container_name") or summary_obj.get("container_id")
         name = summary_obj.get("container_name")
         internal_port_key = localrun.get("internal_port_key") or "80/tcp"
-        image = localrun.get("image_tag") or localrun.get("image_id")
+        image = localrun.get("image_tag") or localrun.get("image_id") 
         env = localrun.get("env")
         resources = localrun.get("resources", {}) or {}
         cpu = resources.get("cpu")
@@ -465,7 +465,7 @@ def tasks_logs(task_id: str, tail: int = 200):
         status = t.get("status") if isinstance(t, dict) else "unknown"
         
         # Enhanced: Load comprehensive build information from builds directory
-        builds_dir = os.path.join("/upload/pxxl", task_id)
+        builds_dir = os.path.join("/pxxl/upload", task_id)
         build_info = {
             "task_id": task_id,
             "status": status,
@@ -552,7 +552,7 @@ class ContainerControlRequest(BaseModel):
 @app.post("/docker/container/start")
 def docker_container_start(req: ContainerControlRequest):
     try:
-        builds_dir = os.path.join("/upload/pxxl", req.task_id)
+        builds_dir = os.path.join("/pxxl/upload", req.task_id)
         summary_path = os.path.join(builds_dir, "build.info.json")
         if not os.path.exists(summary_path):
             raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
@@ -579,7 +579,7 @@ def docker_container_start(req: ContainerControlRequest):
 @app.post("/docker/container/restart")
 def docker_container_restart(req: ContainerControlRequest):
     try:
-        builds_dir = os.path.join("/upload/pxxl", req.task_id)
+        builds_dir = os.path.join("/pxxl/upload", req.task_id)
         summary_path = os.path.join(builds_dir, "build.info.json")
         if not os.path.exists(summary_path):
             raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
@@ -610,7 +610,7 @@ def docker_container_restart(req: ContainerControlRequest):
 @app.post("/docker/container/stop")
 def docker_container_stop(req: ContainerControlRequest):
     try:
-        builds_dir = os.path.join("/upload/pxxl", req.task_id)
+        builds_dir = os.path.join("/pxxl/upload", req.task_id)
         summary_path = os.path.join(builds_dir, "build.info.json")
         if not os.path.exists(summary_path):
             raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
@@ -642,7 +642,7 @@ def docker_container_stop(req: ContainerControlRequest):
 @app.post("/docker/container/status")
 def docker_container_status(req: ContainerControlRequest):
     try:
-        builds_dir = os.path.join("/upload/pxxl", req.task_id)
+        builds_dir = os.path.join("/pxxl/upload", req.task_id)
         summary_path = os.path.join(builds_dir, "build.info.json")
         if not os.path.exists(summary_path):
             raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
@@ -674,7 +674,7 @@ def docker_container_status(req: ContainerControlRequest):
 @app.post("/docker/container/stop")
 def docker_container_stop(req: ContainerControlRequest):
     try:
-        builds_dir = os.path.join("/upload/pxxl", req.task_id)
+        builds_dir = os.path.join("/pxxl/upload", req.task_id)
         summary_path = os.path.join(builds_dir, "build.info.json")
         if not os.path.exists(summary_path):
             raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
@@ -800,7 +800,7 @@ class BuildDeleteRequest(BaseModel):
 @app.post("/build/delete")
 def build_delete(req: BuildDeleteRequest):
     try:
-        builds_dir = os.path.join("/upload/pxxl", req.task_id)
+        builds_dir = os.path.join("/pxxl/upload", req.task_id)
         summary_path = os.path.join(builds_dir, "build.info.json")
         if not os.path.exists(summary_path):
             raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
@@ -995,7 +995,7 @@ class ContainerVolumeAddRequest(BaseModel):
 @app.post("/docker/container/volume/add")
 def docker_container_volume_add(req: ContainerVolumeAddRequest):
     try:
-        builds_dir = os.path.join("/upload/pxxl", req.task_id)
+        builds_dir = os.path.join("/pxxl/upload", req.task_id)
         summary_path = os.path.join(builds_dir, "build.info.json")
         if not os.path.exists(summary_path):
             raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
@@ -1046,7 +1046,7 @@ def docker_container_volume_add(req: ContainerVolumeAddRequest):
 @app.post("/docker/container/ls")
 def docker_container_ls(req: ContainerFsRequest):
     try:
-        builds_dir = os.path.join("/upload/pxxl", req.task_id)
+        builds_dir = os.path.join("/pxxl/upload", req.task_id)
         summary_path = os.path.join(builds_dir, "build.info.json")
         if not os.path.exists(summary_path):
             raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
@@ -1068,7 +1068,7 @@ def docker_container_ls(req: ContainerFsRequest):
 @app.post("/docker/container/du")
 def docker_container_du(req: ContainerFsRequest):
     try:
-        builds_dir = os.path.join("/upload/pxxl", req.task_id)
+        builds_dir = os.path.join("/pxxl/upload", req.task_id)
         summary_path = os.path.join(builds_dir, "build.info.json")
         if not os.path.exists(summary_path):
             raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
@@ -1090,7 +1090,7 @@ def docker_container_du(req: ContainerFsRequest):
 @app.post("/docker/container/usage")
 def docker_container_usage(req: ContainerControlRequest):
     try:
-        builds_dir = os.path.join("/upload/pxxl", req.task_id)
+        builds_dir = os.path.join("/pxxl/upload", req.task_id)
         summary_path = os.path.join(builds_dir, "build.info.json")
         if not os.path.exists(summary_path):
             raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
