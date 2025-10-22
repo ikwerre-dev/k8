@@ -321,6 +321,192 @@ def run_container_extended(
     return {"id": container.id, "name": name or container.name, "status": container.status}
 
 
+def local_run_from_lz4(
+    lz4_path_rel: str,
+    task_id: str,
+    ports: Optional[Dict[str, int]] = None,
+    env: Optional[Dict[str, str]] = None,
+    command: Optional[str] = None,
+    name: Optional[str] = None,
+    cpu: Optional[float] = None,
+    cpuset: Optional[str] = None,
+    memory: Optional[str] = None,
+    emit: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Dict[str, Any]:
+    """Decompress a .tar.lz4, load docker image, and run container.
+    Logs into builds/{task_id} and uses stage transitions: building -> decompiling -> running.
+    Keeps summary status as 'building'.
+    """
+    client = get_client()
+    base_logs_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "builds"))
+    task_logs_dir = os.path.join(base_logs_dir, task_id)
+    os.makedirs(task_logs_dir, exist_ok=True)
+    build_log_path = os.path.join(task_logs_dir, "build.log")
+    build_structured_path = os.path.join(task_logs_dir, "build.jsonl")
+    events_log_path = os.path.join(task_logs_dir, "events.log")
+    error_log_path = os.path.join(task_logs_dir, "error.log")
+    summary_path = os.path.join(task_logs_dir, "build.info.json")
+
+    def _append_line(path: Optional[str], line: str) -> None:
+        if not path:
+            return
+        try:
+            with open(path, "a") as f:
+                f.write(line.rstrip("\n") + "\n")
+        except Exception:
+            pass
+
+    def _append_json(path: Optional[str], obj: Dict[str, Any]) -> None:
+        if not path:
+            return
+        try:
+            with open(path, "a") as f:
+                f.write(json.dumps(obj) + "\n")
+        except Exception:
+            pass
+
+    def _write_json(path: Optional[str], obj: Dict[str, Any]) -> None:
+        if not path:
+            return
+        try:
+            with open(path, "w") as f:
+                json.dump(obj, f, indent=2)
+        except Exception:
+            pass
+
+    def _ts() -> str:
+        return time.strftime('%Y-%m-%dT%H:%M:%S')
+
+    # Resolve paths
+    lz4_abs = os.path.abspath(os.path.join(os.getcwd(), lz4_path_rel))
+    if not os.path.exists(lz4_abs):
+        msg = f"lz4 file not found: {lz4_abs}"
+        _append_line(error_log_path, msg)
+        _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "localrun_error", "error": msg})
+        if emit:
+            emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "error", "error": msg})
+        raise FileNotFoundError(msg)
+
+    # Stage: decompiling
+    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling {os.path.basename(lz4_abs)}")
+    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_start", "lz4_path": lz4_abs})
+    if emit:
+        emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "starting", "lz4": lz4_abs})
+
+    tar_path = os.path.join(task_logs_dir, os.path.basename(lz4_abs).replace('.lz4', ''))
+    if not tar_path.endswith('.tar'):
+        tar_path += '.tar'
+
+    try:
+        # Try lz4 decompression
+        res = subprocess.run(["lz4", "-d", "-f", lz4_abs, tar_path], capture_output=True, text=True, timeout=300)
+        if res.returncode != 0:
+            raise RuntimeError(f"lz4 decompression failed: {res.stderr}")
+        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling completed output={tar_path}")
+        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_completed", "tar_path": tar_path})
+        if emit:
+            emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "completed", "output": tar_path})
+    except Exception as e:
+        msg = f"decompression error: {e}"
+        _append_line(error_log_path, msg)
+        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+        _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "decompiling_error", "error": str(e)})
+        if emit:
+            emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "error", "error": str(e)})
+        raise
+
+    # Load image from tar
+    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] loading image from tar")
+    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "image_load_start", "tar_path": tar_path})
+    with open(tar_path, "rb") as f:
+        img_list = client.images.load(f.read())
+    image_id = None
+    image_tag = None
+    try:
+        if img_list:
+            image_id = img_list[0].id
+            tags = img_list[0].tags
+            image_tag = tags[0] if tags else None
+    except Exception:
+        pass
+    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] image loaded id={image_id or ''} tag={image_tag or ''}")
+    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "image_loaded", "image_id": image_id, "tag": image_tag})
+
+    # Stage: running
+    if emit:
+        emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "starting", "image_id": image_id, "tag": image_tag})
+    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] running container")
+    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "run_start", "image_id": image_id, "tag": image_tag})
+
+    # Map cpu to nano_cpus if provided
+    nano_cpus = None
+    if cpu is not None:
+        try:
+            nano_cpus = int(float(cpu) * 1_000_000_000)
+        except Exception:
+            nano_cpus = None
+
+    try:
+        run_res = run_container_extended(
+            image=image_id or (image_tag or ''),
+            name=name,
+            command=command,
+            ports=ports,
+            env=env,
+            mem_limit=memory,
+            nano_cpus=nano_cpus,
+            cpuset_cpus=cpuset,
+            detach=True,
+        )
+        if emit:
+            emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "completed", "container_id": run_res.get("id")})
+        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] run completed container_id={run_res.get('id')}")
+        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "run_completed", "container": run_res})
+    except Exception as e:
+        msg = f"run error: {e}"
+        _append_line(error_log_path, msg)
+        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+        _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "run_error", "error": str(e)})
+        if emit:
+            emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "error", "error": str(e)})
+        raise
+
+    # Update summary but keep status as 'building'
+    try:
+        if os.path.exists(summary_path):
+            with open(summary_path, "r") as f:
+                summary = json.load(f)
+        else:
+            summary = {}
+        summary.update({
+            "status": "building",
+            "stage": "running",
+            "localrun": {
+                "lz4_path": lz4_abs,
+                "tar_path": tar_path,
+                "image_id": image_id,
+                "image_tag": image_tag,
+                "container": run_res,
+                "resources": {
+                    "cpu": cpu,
+                    "cpuset": cpuset,
+                    "memory": memory,
+                }
+            }
+        })
+        _write_json(summary_path, summary)
+    except Exception:
+        pass
+
+    return {
+        "status": "ok",
+        "task_id": task_id,
+        "image_id": image_id,
+        "tag": image_tag,
+        "container": run_res,
+    }
+
+
 def list_path_in_container(id_or_name: str, path: str) -> dict:
     client = get_client()
     c = client.containers.get(id_or_name)

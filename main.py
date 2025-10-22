@@ -22,6 +22,20 @@ class RunRequest(BaseModel):
     ports: Optional[Dict[str, int]] = None  # e.g., {"8000/tcp": 8000}
     env: Optional[Dict[str, str]] = None
     detach: bool = True
+    cpu: Optional[float] = None  # CPUs to allocate (e.g., 0.5, 1.0)
+    cpuset: Optional[str] = None  # CPU set string, e.g., "0-2"
+    memory: Optional[str] = None  # Mem limit, e.g., "512m" or "1g"
+
+class LocalRunRequest(BaseModel):
+    lz4_path: str  # local relative path to .lz4 (or .tar.lz4)
+    build_id: str  # task/build id used for logging dir
+    ports: Optional[Dict[str, int]] = None
+    env: Optional[Dict[str, str]] = None
+    command: Optional[str] = None
+    name: Optional[str] = None
+    cpu: Optional[float] = None
+    cpuset: Optional[str] = None
+    memory: Optional[str] = None
 
 class IdRequest(BaseModel):
     id_or_name: str
@@ -169,13 +183,40 @@ def docker_build(req: BuildRequest):
 @app.post("/docker/run")
 def docker_run(req: RunRequest):
     try:
-        return ds.run_container(
+        # Map cpu to nano_cpus if provided
+        nano_cpus = None
+        if req.cpu is not None:
+            try:
+                nano_cpus = int(float(req.cpu) * 1_000_000_000)
+            except Exception:
+                nano_cpus = None
+        return ds.run_container_extended(
             image=req.image,
             name=req.name,
             command=req.command,
             ports=req.ports,
             env=req.env,
+            mem_limit=req.memory,
+            nano_cpus=nano_cpus,
+            cpuset_cpus=req.cpuset,
             detach=req.detach,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/docker/localrun")
+def docker_localrun(req: LocalRunRequest):
+    try:
+        return ds.local_run_from_lz4(
+            lz4_path_rel=req.lz4_path,
+            task_id=req.build_id,
+            ports=req.ports,
+            env=req.env,
+            command=req.command,
+            name=req.name,
+            cpu=req.cpu,
+            cpuset=req.cpuset,
+            memory=req.memory,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
