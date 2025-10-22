@@ -350,7 +350,7 @@ def local_run_from_lz4(
     Keeps summary status as 'building'.
     """
     client = get_client()
-    base_logs_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "builds"))
+    base_logs_dir = os.path.abspath(os.path.join("/upload/pxxl"))
     task_logs_dir = os.path.join(base_logs_dir, task_id)
     os.makedirs(task_logs_dir, exist_ok=True)
     build_log_path = os.path.join(task_logs_dir, "build.log")
@@ -402,7 +402,7 @@ def local_run_from_lz4(
         return time.strftime('%Y-%m-%dT%H:%M:%S')
 
     # Resolve paths
-    lz4_abs = os.path.abspath(os.path.join(os.getcwd(), lz4_path_rel))
+    lz4_abs = lz4_path_rel if os.path.isabs(lz4_path_rel) else os.path.abspath(os.path.join(os.getcwd(), lz4_path_rel))
     if not os.path.exists(lz4_abs):
         msg = f"lz4 file not found: {lz4_abs}"
         _append_line(error_log_path, msg)
@@ -417,27 +417,50 @@ def local_run_from_lz4(
     if emit:
         emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "starting", "lz4": lz4_abs})
 
-    tar_path = os.path.join(task_logs_dir, os.path.basename(lz4_abs).replace('.lz4', ''))
-    if not tar_path.endswith('.tar'):
-        tar_path += '.tar'
-
-    try:
-        # Try lz4 decompression
-        res = subprocess.run(["lz4", "-d", "-f", lz4_abs, tar_path], capture_output=True, text=True, timeout=300)
-        if res.returncode != 0:
-            raise RuntimeError(f"lz4 decompression failed: {res.stderr}")
-        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling completed output={tar_path}")
-        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_completed", "tar_path": tar_path})
-        if emit:
-            emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "completed", "output": tar_path})
-    except Exception as e:
-        msg = f"decompression error: {e}"
-        _append_line(error_log_path, msg)
-        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
-        _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "decompiling_error", "error": str(e)})
-        if emit:
-            emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "error", "error": str(e)})
-        raise
+    basename = os.path.basename(lz4_abs)
+    if basename.endswith('.gz'):
+        tar_path = os.path.join(task_logs_dir, basename[:-3])
+        if not tar_path.endswith('.tar'):
+            tar_path += '.tar'
+        try:
+            # Decompress gzip to target tar_path
+            with open(tar_path, 'wb') as out:
+                res = subprocess.run(["gzip", "-d", "-c", lz4_abs], stdout=out, stderr=subprocess.PIPE, text=False, timeout=300)
+            if res.returncode != 0:
+                raise RuntimeError(f"gzip decompression failed: {res.stderr.decode('utf-8', errors='ignore')}")
+            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling completed output={tar_path}")
+            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_completed", "tar_path": tar_path})
+            if emit:
+                emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "completed", "output": tar_path})
+        except Exception as e:
+            msg = f"decompression error: {e}"
+            _append_line(error_log_path, msg)
+            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+            _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "decompiling_error", "error": str(e)})
+            if emit:
+                emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "error", "error": str(e)})
+            raise
+    else:
+        tar_path = os.path.join(task_logs_dir, basename.replace('.lz4', ''))
+        if not tar_path.endswith('.tar'):
+            tar_path += '.tar'
+        try:
+            # Try lz4 decompression
+            res = subprocess.run(["lz4", "-d", "-f", lz4_abs, tar_path], capture_output=True, text=True, timeout=300)
+            if res.returncode != 0:
+                raise RuntimeError(f"lz4 decompression failed: {res.stderr}")
+            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling completed output={tar_path}")
+            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_completed", "tar_path": tar_path})
+            if emit:
+                emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "completed", "output": tar_path})
+        except Exception as e:
+            msg = f"decompression error: {e}"
+            _append_line(error_log_path, msg)
+            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+            _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "decompiling_error", "error": str(e)})
+            if emit:
+                emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "error", "error": str(e)})
+            raise
 
     # Load image from tar
     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] loading image from tar")
@@ -456,14 +479,14 @@ def local_run_from_lz4(
     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] image loaded id={image_id or ''} tag={image_tag or ''}")
     _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "image_loaded", "image_id": image_id, "tag": image_tag})
 
-    # Cleanup compressed artifacts to save storage
+    # Cleanup: delete only .tar.gz if provided; keep .tar and other files
     try:
-        if os.path.exists(lz4_abs):
+        removed = []
+        if os.path.exists(lz4_abs) and lz4_abs.endswith('.gz'):
             os.remove(lz4_abs)
-        if os.path.exists(tar_path):
-            os.remove(tar_path)
-        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] cleaned compressed files")
-        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cleanup_compressed_files", "removed": [lz4_abs, tar_path]})
+            removed.append(lz4_abs)
+        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] cleanup completed removed={removed}")
+        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cleanup_compressed_files", "removed": removed})
     except Exception as ce:
         _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] cleanup warning {ce}")
         _append_json(build_structured_path, {"ts": _ts(), "level": "warn", "event": "cleanup_warning", "error": str(ce)})
