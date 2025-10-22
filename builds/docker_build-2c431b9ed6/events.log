@@ -1,4 +1,0 @@
-[2025-10-22 13:38:43] build starting tag=html-site1:latest context=/tmp/docker-builds/docker_build-2c431b9ed6 app_id=html-site1
-[2025-10-22 13:38:43] context prepared path=/tmp/docker-builds/docker_build-2c431b9ed6 dockerfile_name=Dockerfile
-[2025-10-22 13:38:43] build starting dockerfile=Dockerfile inline=True app_id=html-site1
-[2025-10-22 13:38:48] build completed image_id=3d5d451e50e1 duration=4.954s app_id=html-site1

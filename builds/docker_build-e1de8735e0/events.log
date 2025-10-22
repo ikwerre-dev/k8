@@ -1,9 +1,0 @@
-[2025-10-22 13:48:26] build starting tag=html-site1:latest context=/tmp/docker-builds/docker_build-e1de8735e0 app_id=html-site1
-[2025-10-22 13:48:26] context prepared path=/tmp/docker-builds/docker_build-e1de8735e0 dockerfile_name=Dockerfile
-[2025-10-22 13:48:26] build starting dockerfile=Dockerfile inline=True app_id=html-site1
-[2025-10-22 13:48:27] build completed image_id=3d5d451e50e1 duration=1.15s app_id=html-site1
-[2025-10-22 13:48:27] exporting image 3d5d451e50e1 to /Users/robinsonhonour/Documents/js_websites/k8/builds/docker_build-e1de8735e0/html-site1_latest.tar
-[2025-10-22 13:48:29] image exported size=62016512 bytes duration=1.74s
-[2025-10-22 13:48:29] compressing /Users/robinsonhonour/Documents/js_websites/k8/builds/docker_build-e1de8735e0/html-site1_latest.tar with lz4/gzip
-[2025-10-22 13:48:30] compression completed method=lz4 size=35314511 bytes ratio=43.1% duration=0.868s
-[2025-10-22 13:48:30] removed uncompressed tar file /Users/robinsonhonour/Documents/js_websites/k8/builds/docker_build-e1de8735e0/html-site1_latest.tar

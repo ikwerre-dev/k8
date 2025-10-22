@@ -339,6 +339,9 @@ def local_run_from_lz4(
     cpuset: Optional[str] = None,
     memory: Optional[str] = None,
     emit: Optional[Callable[[Dict[str, Any]], None]] = None,
+    volume_name: Optional[str] = None,
+    mount_path: Optional[str] = None,
+    mode: Optional[str] = "rw",
 ) -> Dict[str, Any]:
     """Decompress a .tar.lz4, load docker image, and run container.
     Logs into builds/{task_id} and uses stage transitions: building -> decompiling -> running.
@@ -500,12 +503,25 @@ def local_run_from_lz4(
                 create_network(network_name)
         except Exception:
             pass
+        # Prepare optional persistent volume
+        volumes_arg = None
+        if volume_name and mount_path:
+            try:
+                client.volumes.get(volume_name)
+            except Exception:
+                try:
+                    client.volumes.create(name=volume_name)
+                except Exception:
+                    pass
+            volumes_arg = {volume_name: {"bind": mount_path, "mode": (mode or "rw")}}
+
         run_res = run_container_extended(
             image=image_id or (image_tag or ''),
             name=container_name,
             command=command,
             ports=None,
             env=env,
+            volumes=volumes_arg,
             mem_limit=memory,
             nano_cpus=nano_cpus,
             cpuset_cpus=cpuset,
@@ -846,6 +862,258 @@ def _extract_volumes_from_container(container) -> Dict[str, dict]:
 
 def _extract_env_from_container(container) -> Dict[str, str]:
     env_list = (container.attrs.get("Config", {}) or {}).get("Env", []) or []
+    env: Dict[str, str] = {}
+    for e in env_list:
+        if isinstance(e, str) and "=" in e:
+            k, v = e.split("=", 1)
+            env[k] = v
+    return env
+
+
+def check_volume_attached_to_running_containers(volume_name: str) -> Dict[str, Any]:
+    """Check if a volume is currently attached to any running containers."""
+    client = get_client()
+    attached_containers = []
+    
+    try:
+        # Get all running containers
+        running_containers = client.containers.list(filters={"status": "running"})
+        
+        for container in running_containers:
+            volumes = _extract_volumes_from_container(container)
+            if volume_name in volumes:
+                attached_containers.append({
+                    "id": container.id,
+                    "name": container.name,
+                    "mount_path": volumes[volume_name].get("bind"),
+                    "mode": volumes[volume_name].get("mode")
+                })
+    except Exception as e:
+        return {
+            "volume_name": volume_name,
+            "attached": False,
+            "containers": [],
+            "error": str(e)
+        }
+    
+    return {
+        "volume_name": volume_name,
+        "attached": len(attached_containers) > 0,
+        "containers": attached_containers,
+        "count": len(attached_containers)
+    }
+
+
+def detach_volume_only(id_or_name: str, volume_name: str) -> Dict[str, Any]:
+    """
+    Attempt to detach a volume from a container without recreating the container.
+    
+    Note: Docker API does not support detaching volumes from running containers.
+    This function provides information about the limitation and alternative approaches.
+    """
+    client = get_client()
+    
+    try:
+        container = client.containers.get(id_or_name)
+        container_running = container.status == "running"
+        
+        # Check if the volume is actually attached
+        volumes = _extract_volumes_from_container(container)
+        volume_attached = volume_name in volumes
+        
+        if not volume_attached:
+            return {
+                "status": "not_attached",
+                "message": f"Volume '{volume_name}' is not attached to container '{id_or_name}'",
+                "container_running": container_running,
+                "volume_name": volume_name,
+                "container_id": container.id,
+                "container_name": container.name
+            }
+        
+        # Docker limitation explanation
+        if container_running:
+            return {
+                "status": "docker_limitation",
+                "message": "Docker API does not support detaching volumes from running containers without stopping them",
+                "explanation": "To detach a volume, the container must be stopped, the volume configuration modified, and the container restarted",
+                "alternatives": [
+                    "Use the existing /docker/container/volume/remove endpoint to recreate the container without the volume",
+                    "Stop the container manually, then use Docker CLI to modify volume mounts",
+                    "Create a new container without the volume and migrate data if needed"
+                ],
+                "container_running": True,
+                "volume_name": volume_name,
+                "container_id": container.id,
+                "container_name": container.name,
+                "mount_info": volumes[volume_name]
+            }
+        else:
+            # Container is stopped, we could theoretically modify it, but Docker still doesn't support this directly
+            return {
+                "status": "container_stopped",
+                "message": "Container is stopped. Volume detachment would require container recreation",
+                "explanation": "Even with stopped containers, Docker requires recreation to modify volume mounts",
+                "recommendation": "Use the /docker/container/volume/remove endpoint to recreate without the volume",
+                "container_running": False,
+                "volume_name": volume_name,
+                "container_id": container.id,
+                "container_name": container.name,
+                "mount_info": volumes[volume_name]
+            }
+            
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to check container: {str(e)}",
+            "volume_name": volume_name,
+            "container_id_or_name": id_or_name
+        }
+
+
+def delete_volume_with_attachment_check(volume_name: str, force: bool = False) -> Dict[str, Any]:
+    """
+    Delete a Docker volume with proper checking for attached containers.
+    
+    This function checks if the volume is attached to any running containers
+    and provides detailed information about the deletion process.
+    """
+    client = get_client()
+    
+    try:
+        # First, check if the volume exists
+        try:
+            volume = client.volumes.get(volume_name)
+        except Exception:
+            return {
+                "status": "not_found",
+                "message": f"Volume '{volume_name}' does not exist",
+                "volume_name": volume_name
+            }
+        
+        # Check if volume is attached to any running containers
+        attachment_info = check_volume_attached_to_running_containers(volume_name)
+        
+        if attachment_info["attached"]:
+            if not force:
+                return {
+                    "status": "attached_to_running_containers",
+                    "message": f"Volume '{volume_name}' is attached to {attachment_info['count']} running container(s)",
+                    "volume_name": volume_name,
+                    "attached_containers": attachment_info["containers"],
+                    "recommendation": "Stop the containers first, detach the volume, or use force=true to attempt forced deletion",
+                    "force_warning": "Using force=true may cause data loss and container instability"
+                }
+            else:
+                # Force deletion - warn about potential issues
+                try:
+                    volume.remove(force=True)
+                    return {
+                        "status": "force_deleted",
+                        "message": f"Volume '{volume_name}' was forcefully deleted despite being attached to running containers",
+                        "volume_name": volume_name,
+                        "warning": "This may have caused data loss or container instability",
+                        "previously_attached_containers": attachment_info["containers"]
+                    }
+                except Exception as e:
+                    return {
+                        "status": "force_delete_failed",
+                        "message": f"Failed to force delete volume '{volume_name}': {str(e)}",
+                        "volume_name": volume_name,
+                        "attached_containers": attachment_info["containers"]
+                    }
+        else:
+            # Volume is not attached to running containers, safe to delete
+            try:
+                volume.remove(force=force)
+                return {
+                    "status": "deleted",
+                    "message": f"Volume '{volume_name}' was successfully deleted",
+                    "volume_name": volume_name
+                }
+            except Exception as e:
+                return {
+                    "status": "delete_failed",
+                    "message": f"Failed to delete volume '{volume_name}': {str(e)}",
+                    "volume_name": volume_name
+                }
+                
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error during volume deletion check: {str(e)}",
+            "volume_name": volume_name
+        }
+
+
+def clear_volume_contents(volume_name: str) -> Dict[str, Any]:
+    """
+    Clear all files from a named Docker volume without stopping containers.
+
+    This uses a short-lived helper container to mount the volume at /mnt and
+    remove all contents inside it, including hidden files. Containers that are
+    currently using the volume remain running; however, applications may error
+    if they depend on the files that are being removed.
+    """
+    client = get_client()
+
+    # Ensure volume exists
+    try:
+        volume = client.volumes.get(volume_name)
+    except Exception:
+        return {
+            "status": "not_found",
+            "message": f"Volume '{volume_name}' does not exist",
+            "volume_name": volume_name,
+        }
+
+    # Optional: provide info about running containers using this volume
+    attachment_info = {}
+    try:
+        attachment_info = check_volume_attached_to_running_containers(volume_name)
+    except Exception as e:
+        attachment_info = {"error": str(e)}
+
+    # Use an ephemeral Alpine container to clear the volume contents
+    # The find-based approach reliably handles hidden files and nested dirs.
+    try:
+        cmd = "sh -c 'find /mnt -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +'"
+        client.containers.run(
+            image="alpine:3.19",
+            command=cmd,
+            remove=True,
+            volumes={volume_name: {"bind": "/mnt", "mode": "rw"}},
+            tty=False,
+        )
+
+        # Verify emptiness by counting remaining entries
+        verify_cmd = "sh -c 'ls -A /mnt | wc -l'"
+        out = client.containers.run(
+            image="alpine:3.19",
+            command=verify_cmd,
+            remove=True,
+            volumes={volume_name: {"bind": "/mnt", "mode": "rw"}},
+            tty=False,
+        )
+        try:
+            remaining_count = int((out.decode("utf-8") if isinstance(out, (bytes, bytearray)) else str(out)).strip())
+        except Exception:
+            remaining_count = None
+
+        return {
+            "status": "cleared",
+            "message": f"Volume '{volume_name}' contents cleared",
+            "volume_name": volume_name,
+            "remaining_count": remaining_count,
+            "attachments": attachment_info,
+        }
+    except Exception as e:
+        return {
+            "status": "clear_failed",
+            "message": f"Failed to clear volume '{volume_name}': {str(e)}",
+            "volume_name": volume_name,
+            "attachments": attachment_info,
+        }
 
 
 def recreate_with_added_volume(id_or_name: str, volume_name: str, mount_path: str, mode: str = "rw") -> dict:
@@ -861,11 +1129,36 @@ def recreate_with_added_volume(id_or_name: str, volume_name: str, mount_path: st
     volumes[volume_name] = {"bind": mount_path, "mode": mode}
     env = _extract_env_from_container(container)
     cfg = container.attrs.get("Config", {}) or {}
+    
+    # Better command extraction - preserve original command structure
     cmd_list = cfg.get("Cmd")
-    command = " ".join(cmd_list) if isinstance(cmd_list, list) else (cmd_list or None)
+    command = None
+    if isinstance(cmd_list, list) and cmd_list:
+        # If it's a single command, pass it as string; if multiple parts, join them
+        if len(cmd_list) == 1:
+            command = cmd_list[0]
+        else:
+            command = " ".join(cmd_list)
+    elif isinstance(cmd_list, str) and cmd_list.strip():
+        command = cmd_list
+    # If no explicit command, let Docker use the image's default CMD/ENTRYPOINT
+    
     image = (container.image.tags[0] if container.image.tags else container.image.id)
     name = container.name
     network_mode = (container.attrs.get("HostConfig", {}) or {}).get("NetworkMode")
+    
+    # Extract additional container configuration to preserve behavior
+    host_config = container.attrs.get("HostConfig", {}) or {}
+    port_bindings = host_config.get("PortBindings", {}) or {}
+    
+    # Convert port bindings to the format expected by run_container_extended
+    ports = {}
+    for container_port, host_bindings in port_bindings.items():
+        if host_bindings and len(host_bindings) > 0:
+            host_port = host_bindings[0].get("HostPort")
+            if host_port:
+                ports[container_port] = int(host_port)
+    
     # Stop and remove old container
     try:
         container.stop()
@@ -875,6 +1168,7 @@ def recreate_with_added_volume(id_or_name: str, volume_name: str, mount_path: st
         container.remove(force=True)
     except Exception:
         pass
+    
     # Run new container with same name and added volume
     run_res = run_container_extended(
         image=image,
@@ -883,15 +1177,270 @@ def recreate_with_added_volume(id_or_name: str, volume_name: str, mount_path: st
         env=env,
         volumes=volumes,
         network=network_mode,
+        ports=ports if ports else None,
         detach=True,
     )
-    return {"status": "recreated", "id": run_res.get("id"), "name": name, "volumes": volumes}
-    env: Dict[str, str] = {}
-    for e in env_list:
-        if isinstance(e, str) and "=" in e:
-            k, v = e.split("=", 1)
-            env[k] = v
-    return env
+    
+    # Verify the container is running
+    new_container_id = run_res.get("id")
+    container_running = False
+    container_state = {}
+    
+    if new_container_id:
+        try:
+            # Give the container a moment to start
+            time.sleep(1)
+            new_container = client.containers.get(new_container_id)
+            new_container.reload()
+            container_state = client.api.inspect_container(new_container_id).get("State", {})
+            container_running = bool(container_state.get("Running"))
+            
+            # If not running, try to get logs for debugging
+            if not container_running:
+                try:
+                    logs = new_container.logs(tail=50).decode("utf-8", errors="ignore")
+                    container_state["logs"] = logs
+                except Exception:
+                    pass
+        except Exception as e:
+            container_state["error"] = str(e)
+    
+    return {
+        "status": "recreated", 
+        "id": run_res.get("id"), 
+        "name": name, 
+        "volumes": volumes,
+        "running": container_running,
+        "container_state": container_state,
+        "command_used": command,
+        "ports_preserved": ports
+    }
+
+# Persistent volume size limit helpers (logical limits stored per task)
+
+def _volume_limits_path(task_id: str) -> str:
+    base_dir = os.path.join(os.path.dirname(__file__), "builds", task_id)
+    try:
+        os.makedirs(base_dir, exist_ok=True)
+    except Exception:
+        pass
+    return os.path.join(base_dir, "volume_limits.json")
+
+
+def load_volume_limits(task_id: str) -> Dict:
+    path = _volume_limits_path(task_id)
+    if os.path.exists(path):
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {"limits": {}}
+    return {"limits": {}}
+
+
+def save_volume_limits(task_id: str, data: Dict) -> None:
+    path = _volume_limits_path(task_id)
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
+def set_volume_limit(task_id: str, volume_name: str, mount_path: str, limit_kb: int) -> Dict:
+    data = load_volume_limits(task_id)
+    if "limits" not in data or not isinstance(data["limits"], dict):
+        data["limits"] = {}
+    data["limits"][volume_name] = {"mount_path": mount_path, "limit_kb": int(limit_kb)}
+    save_volume_limits(task_id, data)
+    return {"task_id": task_id, "volume_name": volume_name, "mount_path": mount_path, "limit_kb": int(limit_kb)}
+
+
+def update_volume_limit(task_id: str, volume_name: str, limit_kb: int, mount_path: Optional[str] = None) -> Dict:
+    data = load_volume_limits(task_id)
+    entry = data.get("limits", {}).get(volume_name) or {}
+    if mount_path is None:
+        mount_path = entry.get("mount_path", "")
+    data.setdefault("limits", {})[volume_name] = {"mount_path": mount_path, "limit_kb": int(limit_kb)}
+    save_volume_limits(task_id, data)
+    return {"task_id": task_id, "volume_name": volume_name, "mount_path": mount_path, "limit_kb": int(limit_kb)}
+
+
+def remove_volume_limit(task_id: str, volume_name: str) -> Dict:
+    data = load_volume_limits(task_id)
+    if isinstance(data.get("limits"), dict) and volume_name in data["limits"]:
+        del data["limits"][volume_name]
+        save_volume_limits(task_id, data)
+        removed = True
+    else:
+        removed = False
+    return {"task_id": task_id, "volume_name": volume_name, "removed": removed}
+
+
+def check_volume_limit_status(task_id: str, id_or_name: str, volume_name: str) -> Dict:
+    data = load_volume_limits(task_id)
+    entry = data.get("limits", {}).get(volume_name)
+    if not entry:
+        return {"task_id": task_id, "volume_name": volume_name, "status": "no_limit", "usage_kb": None, "limit_kb": None}
+
+    mount_path = entry.get("mount_path")
+    limit_kb = int(entry.get("limit_kb", 0))
+
+    # Inspect container state; avoid exec if container not running
+    client = get_client()
+    state = {}
+    running = False
+    try:
+        c = client.containers.get(id_or_name)
+        state = client.api.inspect_container(c.id).get("State") or {}
+        running = bool(state.get("Running"))
+    except Exception:
+        state = {}
+        running = False
+
+    # If the container was just recreated, it may need a moment to run
+    if not running:
+        for _ in range(3):
+            try:
+                c = client.containers.get(id_or_name)
+                state = client.api.inspect_container(c.id).get("State") or {}
+                running = bool(state.get("Running"))
+            except Exception:
+                running = False
+            if running:
+                break
+            time.sleep(0.5)
+
+    du_res = None
+    if running:
+        du_res = du_in_container(id_or_name, mount_path)
+    else:
+        du_res = {"path": mount_path, "exit_code": None, "size_kb": None, "output": ""}
+
+    # Normalize usage value
+    size_val = None
+    exit_code = None
+    if isinstance(du_res, dict):
+        size_val = du_res.get("size_kb")
+        exit_code = du_res.get("exit_code")
+    else:
+        try:
+            size_val = int(du_res)
+        except Exception:
+            size_val = None
+
+    if not running:
+        status = "container_not_running"
+    elif size_val is None:
+        status = "error" if (exit_code is not None and exit_code != 0) else "unknown"
+    else:
+        status = "under" if limit_kb > 0 and size_val <= limit_kb else ("over" if limit_kb > 0 else "no_limit")
+
+    return {
+        "task_id": task_id,
+        "volume_name": volume_name,
+        "mount_path": mount_path,
+        "usage_kb": du_res,
+        "limit_kb": limit_kb,
+        "status": status,
+        "container_state": state,
+    }
+
+
+def recreate_without_volume(id_or_name: str, volume_name: str) -> dict:
+    client = get_client()
+    container = client.containers.get(id_or_name)
+    volumes = _extract_volumes_from_container(container)
+    # Remove the volume by name if present
+    if volume_name in volumes:
+        del volumes[volume_name]
+    env = _extract_env_from_container(container)
+    cfg = container.attrs.get("Config", {}) or {}
+    
+    # Better command extraction - preserve original command structure
+    cmd_list = cfg.get("Cmd")
+    command = None
+    if isinstance(cmd_list, list) and cmd_list:
+        # If it's a single command, pass it as string; if multiple parts, join them
+        if len(cmd_list) == 1:
+            command = cmd_list[0]
+        else:
+            command = " ".join(cmd_list)
+    elif isinstance(cmd_list, str) and cmd_list.strip():
+        command = cmd_list
+    # If no explicit command, let Docker use the image's default CMD/ENTRYPOINT
+    
+    image = (container.image.tags[0] if container.image.tags else container.image.id)
+    name = container.name
+    network_mode = (container.attrs.get("HostConfig", {}) or {}).get("NetworkMode")
+    
+    # Extract additional container configuration to preserve behavior
+    host_config = container.attrs.get("HostConfig", {}) or {}
+    ports_config = cfg.get("ExposedPorts", {}) or {}
+    port_bindings = host_config.get("PortBindings", {}) or {}
+    
+    # Convert port bindings to the format expected by run_container_extended
+    ports = {}
+    for container_port, host_bindings in port_bindings.items():
+        if host_bindings and len(host_bindings) > 0:
+            host_port = host_bindings[0].get("HostPort")
+            if host_port:
+                ports[container_port] = int(host_port)
+    
+    try:
+        container.stop()
+    except Exception:
+        pass
+    try:
+        container.remove(force=True)
+    except Exception:
+        pass
+    
+    run_res = run_container_extended(
+        image=image,
+        name=name,
+        command=command,
+        env=env,
+        volumes=volumes,
+        network=network_mode,
+        ports=ports if ports else None,
+        detach=True,
+    )
+    
+    # Verify the container is running
+    new_container_id = run_res.get("id")
+    container_running = False
+    container_state = {}
+    
+    if new_container_id:
+        try:
+            # Give the container a moment to start
+            time.sleep(1)
+            new_container = client.containers.get(new_container_id)
+            new_container.reload()
+            container_state = client.api.inspect_container(new_container_id).get("State", {})
+            container_running = bool(container_state.get("Running"))
+            
+            # If not running, try to get logs for debugging
+            if not container_running:
+                try:
+                    logs = new_container.logs(tail=50).decode("utf-8", errors="ignore")
+                    container_state["logs"] = logs
+                except Exception:
+                    pass
+        except Exception as e:
+            container_state["error"] = str(e)
+    
+    return {
+        "status": "recreated", 
+        "id": run_res.get("id"), 
+        "name": name, 
+        "volumes": volumes,
+        "running": container_running,
+        "container_state": container_state,
+        "command_used": command,
+        "ports_preserved": ports
+    }
 
 
 def blue_green_deploy(base_id_or_name: str, image_repo: str, tag: str, wait_seconds: int = 15) -> dict:
@@ -1674,6 +2223,144 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 os.remove(created_path)
             except Exception:
                 pass
+
+
+def create_database_container(
+    db_type: str,
+    tag: Optional[str] = "latest",
+    container_name: Optional[str] = None,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
+    root_password: Optional[str] = None,
+    db_name: Optional[str] = None,
+    host_port: Optional[int] = None,
+    network: Optional[str] = "nginx-network",
+) -> Dict[str, Any]:
+    """Create a database container (postgres or mysql) and return details.
+
+    - Ensures network exists and runs the container using run_container_extended
+    - Supports optional host_port mapping; if not provided, Docker auto-assigns and we inspect
+    - Returns container id/name, image, ports, and computed connection URLs
+    """
+    client = get_client()
+
+    db = (db_type or "").strip().lower()
+    if db not in ("postgres", "mysql"):
+        return {"status": "error", "message": f"Unsupported db_type: {db_type}"}
+
+    # Ensure network exists
+    try:
+        existing = [n.get("name") for n in list_networks()]
+        if network and network not in existing:
+            create_network(network)
+    except Exception:
+        pass
+
+    # Build image and env
+    image = f"{('postgres' if db == 'postgres' else 'mysql')}:{tag or 'latest'}"
+    env: Dict[str, str] = {}
+    container_port_key = "5432/tcp" if db == "postgres" else "3306/tcp"
+
+    if db == "postgres":
+        if not username or not password:
+            return {"status": "error", "message": "POSTGRES requires username and password"}
+        env["POSTGRES_USER"] = username
+        env["POSTGRES_PASSWORD"] = password
+        if db_name:
+            env["POSTGRES_DB"] = db_name
+    else:
+        # MySQL
+        if not root_password:
+            return {"status": "error", "message": "MYSQL requires root_password"}
+        env["MYSQL_ROOT_PASSWORD"] = root_password
+        if db_name:
+            env["MYSQL_DATABASE"] = db_name
+        if username and password:
+            env["MYSQL_USER"] = username
+            env["MYSQL_PASSWORD"] = password
+
+    # Ports mapping
+    ports = {container_port_key: int(host_port)} if host_port else None
+
+    # Generate a name if not provided
+    if not container_name:
+        rnd = str(random.randint(1000, 9999))
+        container_name = f"db-{db}-{rnd}"
+
+    # Run container
+    run_res = run_container_extended(
+        image=image,
+        name=container_name,
+        env=env,
+        ports=ports,
+        network=network,
+        detach=True,
+    )
+
+    cid = run_res.get("id")
+    details = {}
+    host_port_val: Optional[int] = None
+    try:
+        details = client.api.inspect_container(cid)
+        ports_map = ((details.get("NetworkSettings") or {}).get("Ports") or {})
+        bindings = ports_map.get(container_port_key) or []
+        if bindings:
+            try:
+                host_port_val = int(bindings[0].get("HostPort"))
+            except Exception:
+                host_port_val = None
+    except Exception:
+        details = {}
+
+    # Compute URLs
+    final_db_name = db_name or (username if (db == "postgres" and username) else None)
+    host = "localhost"
+    internal_host = container_name
+    if db == "postgres":
+        user_for_url = username or "postgres"
+        pass_for_url = password or ""
+        external_url = f"postgresql://{user_for_url}:{pass_for_url}@{host}:{host_port_val or (host_port or 5432)}/{final_db_name or ''}".rstrip("/")
+        internal_url = f"postgresql://{user_for_url}:{pass_for_url}@{internal_host}:5432/{final_db_name or ''}".rstrip("/")
+        urls = {"external_url": external_url, "internal_url": internal_url}
+    else:
+        # MySQL
+        user_for_url = username or "root"
+        pass_for_url = (password if username else root_password) or ""
+        external_url = f"mysql://{user_for_url}:{pass_for_url}@{host}:{host_port_val or (host_port or 3306)}/{(db_name or '')}".rstrip("/")
+        internal_url = f"mysql://{user_for_url}:{pass_for_url}@{internal_host}:3306/{(db_name or '')}".rstrip("/")
+        # If a separate app user is created, also provide root URL
+        root_url = None
+        if username and password and root_password:
+            root_url = f"mysql://root:{root_password}@{host}:{host_port_val or (host_port or 3306)}/{(db_name or '')}".rstrip("/")
+        urls = {"external_url": external_url, "internal_url": internal_url}
+        if root_url:
+            urls["root_external_url"] = root_url
+
+    # Mask sensitive env values in response copy
+    env_safe = {}
+    for k, v in env.items():
+        if "PASSWORD" in k.upper():
+            env_safe[k] = "***"
+        else:
+            env_safe[k] = v
+
+    result = {
+        "status": "created",
+        "type": db,
+        "image": image,
+        "id": cid,
+        "name": container_name,
+        "ports": {container_port_key: host_port_val or host_port},
+        "env": env_safe,
+        "urls": urls,
+        "network": network,
+        "inspect": {
+            "state": (details.get("State") if isinstance(details, dict) else None),
+            "network_settings": (details.get("NetworkSettings") if isinstance(details, dict) else None),
+        },
+    }
+
+    return result
 
 
 def start_container(id_or_name: str) -> dict:
