@@ -1573,13 +1573,15 @@ def transfer_build_to_sftp(build_dir: str, task_id: str, sftp_host: str, sftp_us
             username=sftp_username,
             password=sftp_password,
             timeout=30
-        )
+        )  
+        
         
         # Create SFTP client
         sftp = ssh.open_sftp()
         
         # Create remote directory path
-        remote_base_dir = "/pxxl/upload/applications"
+        
+        remote_base_dir = "/upload"
         remote_dir = f"{remote_base_dir}/{task_id}"
         
         _emit_log(f"Ensuring remote directory exists: {remote_dir}")
@@ -1597,7 +1599,7 @@ def transfer_build_to_sftp(build_dir: str, task_id: str, sftp_host: str, sftp_us
                         sftp.mkdir(next_path)
                     except IOError:
                         pass
-                current = next_path
+                current = next_path 
         
         # Ensure base and target directory exist
         ensure_remote_dirs(remote_base_dir)
@@ -2116,7 +2118,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                     sftp_port=sftp_port or 22,
                     emit=emit,
                     app_id=app_id
-                )
+                ) 
                 
                 if sftp_result["status"] == "success":
                     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP transfer completed successfully to {sftp_result['remote_path']}")
