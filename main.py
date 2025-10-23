@@ -469,7 +469,7 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
         if server and str(server).lower() == "build":
             base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "builds"))
         elif server and str(server).lower() == "runtime":
-            base_dir = "/uploads"
+            base_dir = "/app/upload"
         else:
             # Prefer runtime upload locations; fallback to builds if none exist
             for candidate in ["/app/upload", "/upload/pxxl", "/pxxl/upload", "/uploads"]:

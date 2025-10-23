@@ -81,7 +81,7 @@ This API manages Docker images and containers, streams logs for long-running tas
 - `GET /tasks/logs/{task_id}?server=build&tail=200`
   - Reads build logs from the build server path: `./builds/{task_id}`.
 - `GET /tasks/logs/{task_id}?server=runtime&tail=200`
-  - Reads runtime logs from `/uploads/{task_id}`.
+  - Reads runtime logs from `/app/upload/{task_id}`.
 - `GET /tasks/logs/{task_id}?tail=200`
   - Reads runtime logs from `/app/upload/{task_id}` when available.
   - Fallbacks: `/upload/pxxl/{task_id}`, `/pxxl/upload/{task_id}`, or `/uploads/{task_id}` if present; otherwise falls back to `./builds/{task_id}`.
