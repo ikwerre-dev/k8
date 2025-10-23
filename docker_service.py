@@ -2079,7 +2079,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 
                 # Export the Docker image to a tar file
                 export_start = time.time()
-                tar_path = os.path.join(task_logs_dir, f"{tag.replace(':', '_').replace('/', '_')}.tar")
+                tar_path = os.path.join(task_logs_dir, "build.tar")
                 _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] exporting image {image_id} to {tar_path}")
                 _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "image_export_start", "image_id": image_id, "tar_path": tar_path})
                 
@@ -2096,7 +2096,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 
                 # Compress with lz4 (fallback to gzip if lz4 not available)
                 compress_start = time.time()
-                compressed_path = tar_path + ".gz"
+                compressed_path = os.path.join(task_logs_dir, "build.tar.gz")
                 _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] compressing {tar_path} with lz4/gzip")
                 _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "compression_start", "input_path": tar_path, "output_path": compressed_path})
                 
