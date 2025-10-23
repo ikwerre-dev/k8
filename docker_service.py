@@ -350,7 +350,7 @@ def local_run_from_lz4(
     Keeps summary status as 'building'.
     """
     client = get_client()
-    base_logs_dir = os.path.abspath(os.path.join("/pxxl/upload"))
+    base_logs_dir = os.path.abspath(os.path.join("/app/upload"))
     task_logs_dir = os.path.join(base_logs_dir, task_id)
     os.makedirs(task_logs_dir, exist_ok=True)
     build_log_path = os.path.join(task_logs_dir, "build.log")
@@ -411,11 +411,21 @@ def local_run_from_lz4(
             emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "error", "error": msg})
         raise FileNotFoundError(msg)
 
+    # Place a copy under /app/upload/{task_id} so recorded path reflects runtime location
+    basename = os.path.basename(lz4_for_decomp)
+    dest_lz4 = os.path.join(task_logs_dir, basename)
+    try:
+        if lz4_abs != dest_lz4:
+            shutil.copyfile(lz4_abs, dest_lz4)
+    except Exception as e:
+        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] copy warning {e}")
+    lz4_for_decomp = dest_lz4 if os.path.exists(dest_lz4) else lz4_abs
+
     # Stage: decompiling
-    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling {os.path.basename(lz4_abs)}")
-    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_start", "lz4_path": lz4_abs})
+    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling {os.path.basename(lz4_for_decomp)}")
+    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_start", "lz4_path": lz4_for_decomp})
     if emit:
-        emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "starting", "lz4": lz4_abs})
+        emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "starting", "lz4": lz4_for_decomp})
 
     basename = os.path.basename(lz4_abs)
     if basename.endswith('.gz'):
@@ -425,7 +435,7 @@ def local_run_from_lz4(
         try:
             # Decompress gzip to target tar_path
             with open(tar_path, 'wb') as out:
-                res = subprocess.run(["gzip", "-d", "-c", lz4_abs], stdout=out, stderr=subprocess.PIPE, text=False, timeout=300)
+                res = subprocess.run(["gzip", "-d", "-c", lz4_for_decomp], stdout=out, stderr=subprocess.PIPE, text=False, timeout=300)
             if res.returncode != 0:
                 raise RuntimeError(f"gzip decompression failed: {res.stderr.decode('utf-8', errors='ignore')}")
             _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling completed output={tar_path}")
@@ -446,7 +456,7 @@ def local_run_from_lz4(
             tar_path += '.tar'
         try:
             # Try lz4 decompression
-            res = subprocess.run(["lz4", "-d", "-f", lz4_abs, tar_path], capture_output=True, text=True, timeout=300)
+            res = subprocess.run(["lz4", "-d", "-f", lz4_for_decomp, tar_path], capture_output=True, text=True, timeout=300)
             if res.returncode != 0:
                 raise RuntimeError(f"lz4 decompression failed: {res.stderr}")
             _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling completed output={tar_path}")
@@ -482,9 +492,9 @@ def local_run_from_lz4(
     # Cleanup: delete only .tar.gz if provided; keep .tar and other files
     try:
         removed = []
-        if os.path.exists(lz4_abs) and lz4_abs.endswith('.gz'):
-            os.remove(lz4_abs)
-            removed.append(lz4_abs)
+        if os.path.exists(dest_lz4) and dest_lz4.endswith('.gz'):
+            os.remove(dest_lz4)
+            removed.append(dest_lz4)
         _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] cleanup completed removed={removed}")
         _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cleanup_compressed_files", "removed": removed})
     except Exception as ce:
@@ -589,7 +599,7 @@ def local_run_from_lz4(
             "start_check_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(start_ts)),
             "end_check_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(end_ts)),
             "localrun": {
-                "lz4_path": lz4_abs,
+                "lz4_path": lz4_for_decomp,
                 "tar_path": tar_path,
                 "image_id": image_id,
                 "image_tag": image_tag,
