@@ -628,6 +628,9 @@ def docker_container_start(req: ContainerControlRequest):
         if not cid:
             raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
         res = ds.start_container(cid)
+        # persist container id/name in case engine reassigns or aliases
+        summary_obj["container_id"] = res.get("id") or summary_obj.get("container_id")
+        summary_obj["container_name"] = res.get("name") or summary_obj.get("container_name")
         # update status watch metadata
         summary_obj.update({
             "stage": "container_start",
@@ -656,17 +659,35 @@ def docker_container_restart(req: ContainerControlRequest):
             cid = upstream.get("upstream_host")
         if not cid:
             raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
-        stop_res = None
-        start_res = None
+        # Use native Docker restart to avoid manual stop/start sequencing
+        restart_res = None
         try:
-            stop_res = ds.stop_container(cid)
+            restart_res = ds.restart_container(cid)
         except Exception as e:
-            stop_res = {"error": str(e)}
-        try:
-            start_res = ds.start_container(cid)
-        except Exception as e:
-            start_res = {"error": str(e)}
-        return {"task_id": req.task_id, "stop": stop_res, "start": start_res}
+            restart_res = {"error": str(e)}
+        # Inspect state after restart attempt
+        details = ds.inspect_container_details(cid)
+        state = details.get("state") or {}
+        running = bool(state.get("Running"))
+        # persist container id/name and stage in summary
+        summary_obj["container_id"] = details.get("id") or summary_obj.get("container_id")
+        summary_obj["container_name"] = details.get("name") or summary_obj.get("container_name")
+        summary_obj.update({
+            "stage": "container_restart",
+            "status": "completed"
+        })
+        with open(summary_path, "w") as f:
+            json.dump(summary_obj, f, indent=2)
+        return {
+            "task_id": req.task_id,
+            "restart": restart_res,
+            "container": {
+                "id": details.get("id"),
+                "name": details.get("name"),
+                "running": running,
+                "state": state,
+            }
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -686,18 +707,17 @@ def docker_container_stop(req: ContainerControlRequest):
             cid = upstream.get("upstream_host")
         if not cid:
             raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
-        details = ds.inspect_container_details(cid)
-        state = details.get("state") or {}
-        running = bool(state.get("Running"))
-        return {
-            "task_id": req.task_id,
-            "container": {
-                "id": details.get("id"),
-                "name": details.get("name"),
-                "running": running,
-                "state": state,
-            }
-        }
+        res = ds.stop_container(cid)
+        # persist container id/name even on stop for consistency
+        summary_obj["container_id"] = res.get("id") or summary_obj.get("container_id")
+        summary_obj["container_name"] = res.get("name") or summary_obj.get("container_name")
+        summary_obj.update({
+            "stage": "container_stop",
+            "status": "completed"
+        })
+        with open(summary_path, "w") as f:
+            json.dump(summary_obj, f, indent=2)
+        return {"task_id": req.task_id, "container": res}
     except HTTPException:
         raise
     except Exception as e:
@@ -749,6 +769,70 @@ def docker_container_stop(req: ContainerControlRequest):
         if not cid:
             raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
         res = ds.stop_container(cid)
+        # persist container id/name even on stop for consistency
+        summary_obj["container_id"] = res.get("id") or summary_obj.get("container_id")
+        summary_obj["container_name"] = res.get("name") or summary_obj.get("container_name")
+        summary_obj.update({
+            "stage": "container_stop",
+            "status": "completed"
+        })
+        with open(summary_path, "w") as f:
+            json.dump(summary_obj, f, indent=2)
+        return {"task_id": req.task_id, "container": res}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/docker/container/status")
+def docker_container_status(req: ContainerControlRequest):
+    try:
+        summary_path, builds_dir = _resolve_summary_path(req.task_id)
+        if not os.path.exists(summary_path):
+            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
+        with open(summary_path, "r") as f:
+            summary_obj = json.load(f)
+        cid = summary_obj.get("container_name") or summary_obj.get("container_id")
+        if not cid:
+            upstream = (summary_obj.get("upstream", {}) or {})
+            cid = upstream.get("upstream_host")
+        if not cid:
+            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
+        details = ds.inspect_container_details(cid)
+        state = details.get("state") or {}
+        running = bool(state.get("Running"))
+        return {
+            "task_id": req.task_id,
+            "container": {
+                "id": details.get("id"),
+                "name": details.get("name"),
+                "running": running,
+                "state": state,
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/docker/container/stop")
+def docker_container_stop(req: ContainerControlRequest):
+    try:
+        summary_path, builds_dir = _resolve_summary_path(req.task_id)
+        if not os.path.exists(summary_path):
+            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
+        with open(summary_path, "r") as f:
+            summary_obj = json.load(f)
+        cid = summary_obj.get("container_name") or summary_obj.get("container_id")
+        if not cid:
+            upstream = (summary_obj.get("upstream", {}) or {})
+            cid = upstream.get("upstream_host")
+        if not cid:
+            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
+        res = ds.stop_container(cid)
+        # persist container id/name even on stop for consistency
+        summary_obj["container_id"] = res.get("id") or summary_obj.get("container_id")
+        summary_obj["container_name"] = res.get("name") or summary_obj.get("container_name")
         summary_obj.update({
             "stage": "container_stop",
             "status": "completed"
@@ -987,248 +1071,6 @@ class VolumeRemoveRequest(BaseModel):
     name: str
     force: Optional[bool] = False
 
-class VolumeClearRequest(BaseModel):
-    name: str
-
-@app.post("/docker/volume/remove")
-def docker_volume_remove(req: VolumeRemoveRequest):
-    try:
-        return ds.remove_volume(req.name, force=bool(req.force))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/volume/clear")
-def docker_volume_clear(req: VolumeClearRequest):
-    """
-    Clear a Docker volume's contents without stopping containers.
-    Uses a short-lived helper container to mount and empty the volume.
-    """
-    try:
-        result = ds.clear_volume_contents(req.name)
-        if result.get("status") == "not_found":
-            raise HTTPException(status_code=404, detail=result)
-        elif result.get("status") in ("clear_failed", "error"):
-            raise HTTPException(status_code=500, detail=result)
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/volume/delete")
-def docker_volume_delete(req: VolumeRemoveRequest):
-    """
-    Delete a Docker volume with proper checking for attached containers.
-    
-    This endpoint provides better error handling and information about
-    volumes that are attached to running containers.
-    """
-    try:
-        result = ds.delete_volume_with_attachment_check(req.name, force=bool(req.force))
-        
-        # Return appropriate HTTP status based on the result
-        if result["status"] == "not_found":
-            raise HTTPException(status_code=404, detail=result)
-        elif result["status"] == "attached_to_running_containers":
-            # Return 409 Conflict when volume is attached to running containers
-            raise HTTPException(status_code=409, detail=result)
-        elif result["status"] in ["delete_failed", "force_delete_failed", "error"]:
-            raise HTTPException(status_code=500, detail=result)
-        else:
-            # Return 200 for successful deletions (including force deletions with warnings)
-            return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-class ContainerFsRequest(BaseModel):
-    task_id: str
-    path: Optional[str] = "/"
-
-class ContainerVolumeAddRequest(BaseModel):
-    task_id: str 
-    volume_name: str
-    mount_path: str
-    mode: Optional[str] = "rw"
-    limit_mb: Optional[int] = None
-
-@app.post("/docker/container/volume/add")
-def docker_container_volume_add(req: ContainerVolumeAddRequest):
-    try:
-        summary_path, builds_dir = _resolve_summary_path(req.task_id)
-        if not os.path.exists(summary_path):
-            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
-        with open(summary_path, "r") as f:
-            summary_obj = json.load(f)
-        cid = summary_obj.get("container_name") or summary_obj.get("container_id")
-        if not cid:
-            upstream = (summary_obj.get("upstream", {}) or {})
-            cid = upstream.get("upstream_host")
-        if not cid:
-            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
-        res = ds.recreate_with_added_volume(cid, req.volume_name, req.mount_path, req.mode or "rw")
-        # Optionally set a logical size limit (provided in MB)
-        saved_limit = None
-        usage_status = None
-        if req.limit_mb is not None:
-            try:
-                limit_kb = int(req.limit_mb) * 1024
-                saved_limit = ds.set_volume_limit(req.task_id, req.volume_name, req.mount_path, limit_kb)
-                new_cid = res.get("id") or cid
-                usage_status = ds.check_volume_limit_status(req.task_id, new_cid, req.volume_name)
-            except Exception as e:
-                saved_limit = {"error": str(e)}
-        try:
-            summary_obj["container_id"] = res.get("id") or summary_obj.get("container_id")
-            vols = summary_obj.get("volumes") or []
-            vol_entry = {"name": req.volume_name, "mount": req.mount_path, "mode": req.mode or "rw"}
-            if req.limit_mb is not None:
-                vol_entry["limit_mb"] = int(req.limit_mb)
-            vols.append(vol_entry)
-            summary_obj["volumes"] = vols
-            with open(summary_path, "w") as f:
-                json.dump(summary_obj, f, indent=2)
-        except Exception:
-            pass
-        resp = {"task_id": req.task_id, **res}
-        if saved_limit is not None:
-            resp["limit"] = saved_limit
-        if usage_status is not None:
-            resp["usage"] = usage_status
-        return resp
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Update ls endpoint to return structured entries with sizes
-@app.post("/docker/container/ls")
-def docker_container_ls(req: ContainerFsRequest):
-    try:
-        summary_path, builds_dir = _resolve_summary_path(req.task_id)
-        if not os.path.exists(summary_path):
-            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
-        with open(summary_path, "r") as f:
-            summary_obj = json.load(f)
-        cid = summary_obj.get("container_name") or summary_obj.get("container_id")
-        if not cid:
-            upstream = (summary_obj.get("upstream", {}) or {})
-            cid = upstream.get("upstream_host")
-        if not cid:
-            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
-        res = ds.ls_detailed_in_container(cid, req.path or "/", include_sizes=True)
-        return {"task_id": req.task_id, **res}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/container/du")
-def docker_container_du(req: ContainerFsRequest):
-    try:
-        summary_path, builds_dir = _resolve_summary_path(req.task_id)
-        if not os.path.exists(summary_path):
-            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
-        with open(summary_path, "r") as f:
-            summary_obj = json.load(f)
-        cid = summary_obj.get("container_name") or summary_obj.get("container_id")
-        if not cid:
-            upstream = (summary_obj.get("upstream", {}) or {})
-            cid = upstream.get("upstream_host")
-        if not cid:
-            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
-        res = ds.du_in_container(cid, req.path or "/")
-        return {"task_id": req.task_id, **res}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/docker/container/usage")
-def docker_container_usage(req: ContainerControlRequest):
-    try:
-        summary_path, builds_dir = _resolve_summary_path(req.task_id)
-        if not os.path.exists(summary_path):
-            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
-        with open(summary_path, "r") as f:
-            summary_obj = json.load(f)
-        cid = summary_obj.get("container_name") or summary_obj.get("container_id")
-        if not cid:
-            upstream = (summary_obj.get("upstream", {}) or {})
-            cid = upstream.get("upstream_host")
-        if not cid:
-            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
-        info = ds.inspect_container_details(cid)
-        return {"task_id": req.task_id, "id": info.get("id"), "name": info.get("name"), "size_rw": info.get("size_rw"), "size_root_fs": info.get("size_root_fs"), "mounts": info.get("mounts"), "state": info.get("state"), "computed": info.get("computed")}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# --- Persistent volume size limit APIs ---
-class VolumeLimitSetRequest(BaseModel):
-    task_id: str
-    volume_name: str
-    mount_path: str
-    limit_kb: int
-
-@app.post("/docker/container/volume/limit/set")
-def docker_volume_limit_set(req: VolumeLimitSetRequest):
-    try:
-        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
-        summary_path = os.path.join(builds_dir, "build.info.json")
-        if not os.path.exists(summary_path):
-            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
-        with open(summary_path, "r") as f:
-            summary_obj = json.load(f)
-        cid = summary_obj.get("container_name") or summary_obj.get("container_id")
-        if not cid:
-            upstream = (summary_obj.get("upstream", {}) or {})
-            cid = upstream.get("upstream_host")
-        if not cid:
-            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
-        saved = ds.set_volume_limit(req.task_id, req.volume_name, req.mount_path, req.limit_kb)
-        status = ds.check_volume_limit_status(req.task_id, cid, req.volume_name)
-        return {"status": "ok", "saved": saved, "usage": status}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-class VolumeLimitUpdateRequest(BaseModel):
-    task_id: str
-    volume_name: str
-    limit_kb: int
-    mount_path: Optional[str] = None
-
-@app.post("/docker/container/volume/limit/update")
-def docker_volume_limit_update(req: VolumeLimitUpdateRequest):
-    try:
-        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
-        summary_path = os.path.join(builds_dir, "build.info.json")
-        if not os.path.exists(summary_path):
-            raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
-        with open(summary_path, "r") as f:
-            summary_obj = json.load(f)
-        cid = summary_obj.get("container_name") or summary_obj.get("container_id")
-        if not cid:
-            upstream = (summary_obj.get("upstream", {}) or {})
-            cid = upstream.get("upstream_host")
-        if not cid:
-            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
-        saved = ds.update_volume_limit(req.task_id, req.volume_name, req.limit_kb, req.mount_path)
-        status = ds.check_volume_limit_status(req.task_id, cid, req.volume_name)
-        return {"status": "ok", "saved": saved, "usage": status}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-class VolumeRemoveRequest(BaseModel):
-    task_id: str
-    volume_name: str
-
 class VolumeDetachRequest(BaseModel):
     task_id: str
     volume_name: str
@@ -1316,9 +1158,8 @@ def docker_volume_remove_and_delete(req: VolumeRemoveAndDeleteRequest):
     explains Docker's limitations regarding volume detachment from running containers.
     """
     try:
-        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
-        summary_path = os.path.join(builds_dir, "build.info.json")
-        if not os.path.exists(summary_path):
+        summary_path, builds_dir = _resolve_summary_path(req.task_id)
+        if not summary_path or not os.path.exists(summary_path):
             raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
         
         result = {"status": "ok"}
