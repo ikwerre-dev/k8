@@ -305,6 +305,7 @@ def run_container_extended(
     cpuset_mems: Optional[str] = None,
     memswap_limit: Optional[str] = None,
     storage_opt: Optional[Dict[str, str]] = None,
+    labels: Optional[Dict[str, str]] = None,
 ) -> dict:
     client = get_client()
     container = client.containers.run(
@@ -325,6 +326,7 @@ def run_container_extended(
         storage_opt=storage_opt,
         detach=detach,
         log_config=LogConfig(type=log_driver, config=log_options) if log_driver else None,
+        labels=labels,
     )
     return {"id": container.id, "name": name or container.name, "status": container.status}
 
@@ -344,6 +346,7 @@ def local_run_from_lz4(
     volume_name: Optional[str] = None,
     mount_path: Optional[str] = None,
     mode: Optional[str] = "rw",
+    labels: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Decompress a .tar.lz4, load docker image, and run container.
     Logs into builds/{task_id} and uses stage transitions: building -> decompiling -> running.
@@ -531,8 +534,8 @@ def local_run_from_lz4(
     internal_port_key = internal_port_key or "80/tcp"
 
     try:
-        # Ensure nginx-network exists
-        network_name = "nginx-network"
+        # Ensure traefik-network exists
+        network_name = "traefik-network"
         try:
             existing = [n.get("name") for n in list_networks()]
             if network_name not in existing:
@@ -563,6 +566,7 @@ def local_run_from_lz4(
             cpuset_cpus=cpuset,
             detach=True,
             network=network_name,
+            labels=labels,
         )
         if emit:
             emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "completed", "container_id": run_res.get("id"), "container_name": run_res.get("name")})
@@ -617,7 +621,8 @@ def local_run_from_lz4(
                 "env": env,
                 "command": command,
                 "internal_port_key": internal_port_key,
-                "network": "nginx-network",
+                "network": "traefik-network",
+                "labels": labels,
             }
         })
         _write_json(summary_path, summary)
@@ -2296,7 +2301,7 @@ def create_database_container(
     root_password: Optional[str] = None,
     db_name: Optional[str] = None,
     host_port: Optional[int] = None,
-    network: Optional[str] = "nginx-network",
+    network: Optional[str] = "traefik-network",
 ) -> Dict[str, Any]:
     """Create a database container and return details.
 

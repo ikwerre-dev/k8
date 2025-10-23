@@ -40,6 +40,7 @@ class LocalRunRequest(BaseModel):
     app_id: Optional[str] = None  # app identifier for container naming
     ports: Optional[Dict[str, int]] = None
     env: Optional[Dict[str, str]] = None
+    labels: Optional[Dict[str, str]] = None
     command: Optional[str] = None
     name: Optional[str] = None
     cpu: Optional[float] = None
@@ -71,6 +72,7 @@ def docker_localrun(req: LocalRunRequest):
             app_id=req.app_id,
             ports=req.ports,
             env=req.env,
+            labels=req.labels,
             command=req.command,
             name=req.name,
             cpu=req.cpu,
@@ -84,17 +86,12 @@ def docker_localrun(req: LocalRunRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 class NginxSignDomainRequest(BaseModel):
-    domain: str
-    conf_dir: str
     task_id: str
     app_id: Optional[str] = None
     old_container: Optional[str] = None
     old_task_id: Optional[str] = None
     new_container: Optional[str] = None
     port: Optional[int] = None
-    ssl: Optional[bool] = None
-    email: Optional[str] = None
-    old_certificate_path: Optional[str] = None
 
 @app.post("/nginx/sign-domain")
 def nginx_sign_domain(req: NginxSignDomainRequest):
@@ -162,111 +159,24 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
         container_name = req.new_container or None
         if not container_name and req.app_id and req.task_id:
             container_name = f"{req.app_id}-{req.task_id}"
-        # Determine upstream internal port from summary localrun.internal_port_key or default 80
-        internal_port = req.port
-        if not internal_port:
-            try:
-                with open(summary_path, "r") as f:
-                    summary_obj = json.load(f)
-                localrun = (summary_obj.get("localrun", {}) or {})
-                ipk = localrun.get("internal_port_key") or "80/tcp"
-                try:
-                    internal_port = int(str(ipk).split("/", 1)[0])
-                except Exception:
-                    internal_port = 80
-            except Exception:
-                internal_port = 80
-        # Helper: sanitize domain for filesystem paths
-        def _sanitize_domain(d: str) -> str:
-            d = (d or "").strip()
-            d = d.replace("http://", "").replace("https://", "")
-            return d.strip("/")
-        domain_clean = _sanitize_domain(req.domain)
 
-        certbot = None
-        cert_paths = None
-        # If ssl requested, issue cert via webroot and install
-        if req.ssl is True:
-            try:
-                summary_obj.update({"status": "signing", "stage": "signing"})
-                _write_json(summary_path, summary_obj)
-            except Exception:
-                pass
-            _append_line(events_log_path, "signing about to start")
-            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "signing_about_to_start", "domain": domain_clean})
-            # First write an HTTP-only config to ensure ACME challenges are served locally
-            ns.create_or_update_site_in_dir(req.app_id, req.domain, internal_port, req.conf_dir, upstream_host=container_name, ssl=False)
-            ns.reload_nginx()
-            _append_line(events_log_path, "signing in progress")
-            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "signing_in_progress"})
-            # Ensure ACME directory exists in the shared webroot (mounted to Nginx as /usr/share/nginx/html)
-            try:
-                os.makedirs("/pxxl/proxy/html/.well-known/acme-challenge", exist_ok=True)
-            except Exception:
-                pass
-            # Run certbot with webroot; require email or allow unsafe without email
-            try:
-                args = [
-                    "certbot", "certonly", "--webroot",
-                    "-w", "/pxxl/proxy/html",
-                    "-d", domain_clean,
-                    "-n", "--agree-tos",
-                ]
-                if req.email:
-                    args += ["-m", req.email]
-                else:
-                    args += ["--register-unsafely-without-email"]
-                res = subprocess.run(args, capture_output=True, text=True)
-                if res.returncode == 0:
-                    certbot = {"status": "issued"}
-                    # Copy live certs to /etc/ssl for nginx usage
-                    live_dir = os.path.join("/etc/letsencrypt/live", domain_clean)
-                    crt_src = os.path.join(live_dir, "fullchain.pem")
-                    key_src = os.path.join(live_dir, "privkey.pem")
-                    crt_dst = os.path.join("/etc/ssl/certs", f"{domain_clean}.crt")
-                    key_dst = os.path.join("/etc/ssl/private", f"{domain_clean}.key")
-                    try:
-                        if os.path.exists(crt_src) and os.path.exists(key_src):
-                            os.makedirs("/etc/ssl/certs", exist_ok=True)
-                            os.makedirs("/etc/ssl/private", exist_ok=True)
-                            shutil.copyfile(crt_src, crt_dst)
-                            shutil.copyfile(key_src, key_dst)
-                            cert_paths = {"crt": crt_dst, "key": key_dst}
-                        else:
-                            certbot = {"status": "issued", "warning": "letsencrypt files not found"}
-                    except Exception as e:
-                        certbot = {"status": "issued", "copy_error": str(e)}
-                else:
-                    certbot = {"status": "error", "returncode": str(res.returncode), "stderr": res.stderr}
-            except Exception as e:
-                certbot = {"status": "error", "error": str(e)}
-            # Optionally delete old certificate and reload
-            if req.old_certificate_path:
-                try:
-                    if os.path.exists(req.old_certificate_path):
-                        os.remove(req.old_certificate_path)
-                        _append_line(events_log_path, f"old certificate deleted {req.old_certificate_path}")
-                        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "old_certificate_deleted", "path": req.old_certificate_path})
-                        try:
-                            ns.reload_nginx()
-                        except Exception:
-                            pass
-                except Exception as e:
-                    _append_line(events_log_path, f"old certificate delete warning {e}")
-            # After issuance/copy, write HTTPS config
-            site_res = ns.create_or_update_site_in_dir(req.app_id, req.domain, internal_port, req.conf_dir, upstream_host=container_name, ssl=True)
-            reload_res = ns.reload_nginx()
-            _append_line(events_log_path, "signing completed")
-            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "signing_completed", "cert_paths": cert_paths or {}})
-            try:
-                summary_obj.update({"status": "completed", "stage": "signed", "cert_paths": cert_paths or {}})
-                _write_json(summary_path, summary_obj)
-            except Exception:
-                pass
-        else:
-            # Write config per requested mode (legacy None or http-only False)
-            site_res = ns.create_or_update_site_in_dir(req.app_id, req.domain, internal_port, req.conf_dir, upstream_host=container_name, ssl=req.ssl)
-            reload_res = ns.reload_nginx()
+        # Only update status and logs; no Nginx or Certbot actions
+        try:
+            summary_obj.update({"status": "signing", "stage": "signing"})
+            _write_json(summary_path, summary_obj)
+        except Exception:
+            pass
+        _append_line(events_log_path, "signing in progress")
+        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "signing_in_progress"})
+
+        _append_line(events_log_path, "signing completed")
+        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "signing_completed"})
+        try:
+            summary_obj.update({"status": "completed", "stage": "signed"})
+            _write_json(summary_path, summary_obj)
+        except Exception:
+            pass
+
         # Stop old container if provided, then remove it
         old_stop = None
         old_remove = None
@@ -310,14 +220,9 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
         return {
             "stage": "signing_domain",
             "status": "completed",
-            "conf_path": site_res.get("path"),
-            "port": internal_port,
             "upstream_host": container_name,
-            "nginx_reload": reload_res,
             "old_stop": old_stop,
             "old_remove": old_remove,
-            "certbot": certbot,
-            "cert_paths": cert_paths,
             "images_prune": images_prune,
         }
     except Exception as e:
@@ -1468,7 +1373,7 @@ def database_create(req: DatabaseCreateRequest):
             root_password=req.root_password,
             db_name=req.db_name,
             host_port=req.host_port,
-            network="nginx-network",
+            network="traefik-network",
         )
         if isinstance(res, dict) and res.get("status") == "error":
             raise HTTPException(status_code=400, detail=res)
