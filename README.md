@@ -167,11 +167,20 @@ This API manages Docker images and containers, streams logs for long-running tas
     - `old_container` (string, optional): ID or name of the old container to stop
     - `port` (int, optional): Upstream port; auto-detected from `new_container` or auto-filled from `build.info.json`
     - `task_id` (string, optional): If provided, reads `builds/{task_id}/build.info.json` to auto-fill `app_id`, `new_container`, and `port`
+    - `ssl` (bool, optional):
+      - `true` – automatically issues a Let’s Encrypt cert via Certbot (webroot) and writes HTTPS + HTTP proxy blocks with WebSocket headers.
+      - `false` – writes HTTP-only proxy with WebSocket headers.
+      - `null/omitted` – legacy: HTTP redirects to HTTPS; assumes certs already present at `/etc/ssl`.
+    - `email` (string, optional): Certbot account email; if omitted with `ssl=true`, registers with `--register-unsafely-without-email`.
   - Behavior:
     - Generates an Nginx config that proxies `domain` to the new container host port
+    - Always includes `proxy_http_version 1.1`, `Upgrade`, and `Connection "upgrade"` for WebSockets.
+    - Serves ACME challenges from `/usr/share/nginx/html` (mounted from `/pxxl/proxy/html`), path `/.well-known/acme-challenge/`.
+    - If `ssl=true`, first writes an HTTP-only config, reloads, runs `certbot certonly --webroot -w /pxxl/proxy/html -d <domain> ...`, copies issued certs to `/etc/ssl/certs/<domain>.crt` and `/etc/ssl/private/<domain>.key`, then writes HTTPS config and reloads.
     - Writes to `{conf_dir}/{app_id}.conf` (creates or updates if exists)
     - Reloads Nginx without stopping (`nginx -s reload`)
     - Stops `old_container` if provided
+  - Returns `{ stage: "signing_domain", status: "completed", conf_path, port, upstream_host, nginx_reload, old_stop, old_remove, certbot, cert_paths, images_prune }`
 - `POST /app/update-port` – Update both Docker container port and Nginx config using saved build metadata
   - Body:
     - `task_id` (string): Task/build ID to locate `build.info.json`
@@ -184,4 +193,3 @@ This API manages Docker images and containers, streams logs for long-running tas
     - Updates `build.info.json` (`host_port`, `ports_requested`)
     - Updates `{conf_dir}/{app_id}.conf` to proxy to `new_port` and reloads Nginx
   - Returns `{ stage: "update_port", status: "completed", new_port, container, nginx_reload }`
-- Returns `{ stage: "signing_domain", status: "completed", conf_path, port, nginx_reload, old_stop }`

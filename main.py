@@ -7,6 +7,7 @@ import json
 import shutil
 import paramiko
 import posixpath
+import subprocess
 
 import docker_service as ds
 import system_service as sys
@@ -91,6 +92,9 @@ class NginxSignDomainRequest(BaseModel):
     old_task_id: Optional[str] = None
     new_container: Optional[str] = None
     port: Optional[int] = None
+    ssl: Optional[bool] = None
+    email: Optional[str] = None
+    old_certificate_path: Optional[str] = None
 
 @app.post("/nginx/sign-domain")
 def nginx_sign_domain(req: NginxSignDomainRequest):
@@ -102,6 +106,33 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
                 summary_obj = json.load(f)
         except Exception:
             summary_obj = {}
+        os.makedirs(builds_dir, exist_ok=True)
+        import time
+        events_log_path = os.path.join(builds_dir, "events.log")
+        build_structured_path = os.path.join(builds_dir, "build.jsonl")
+        def _append_line(path: str, msg: str):
+            try:
+                now = time.strftime('%Y-%m-%d %H:%M:%S')
+                with open(path, "a") as f:
+                    f.write(f"[{now}] {msg}\n")
+            except Exception:
+                pass
+        def _append_json(path: str, obj: dict):
+            try:
+                with open(path, "a") as f:
+                    f.write(json.dumps(obj) + "\n")
+            except Exception:
+                pass
+        def _write_json(path: str, obj: dict):
+            try:
+                with open(path, "w") as f:
+                    json.dump(obj, f, indent=2)
+            except Exception:
+                pass
+        def _ts() -> str:
+            return time.strftime('%Y-%m-%dT%H:%M:%S')
+        _append_line(events_log_path, "uploading completed")
+        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "upload_completed"})
         # Infer app_id if missing
         if not req.app_id:
             builds_dir = os.path.join("/app/upload", req.task_id)
@@ -145,9 +176,97 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
                     internal_port = 80
             except Exception:
                 internal_port = 80
-        # Write app_id.conf targeting container name on internal network
-        site_res = ns.create_or_update_site_in_dir(req.app_id, req.domain, internal_port, req.conf_dir, upstream_host=container_name)
-        reload_res = ns.reload_nginx()
+        # Helper: sanitize domain for filesystem paths
+        def _sanitize_domain(d: str) -> str:
+            d = (d or "").strip()
+            d = d.replace("http://", "").replace("https://", "")
+            return d.strip("/")
+        domain_clean = _sanitize_domain(req.domain)
+
+        certbot = None
+        cert_paths = None
+        # If ssl requested, issue cert via webroot and install
+        if req.ssl is True:
+            try:
+                summary_obj.update({"status": "signing", "stage": "signing"})
+                _write_json(summary_path, summary_obj)
+            except Exception:
+                pass
+            _append_line(events_log_path, "signing about to start")
+            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "signing_about_to_start", "domain": domain_clean})
+            # First write an HTTP-only config to ensure ACME challenges are served locally
+            ns.create_or_update_site_in_dir(req.app_id, req.domain, internal_port, req.conf_dir, upstream_host=container_name, ssl=False)
+            ns.reload_nginx()
+            _append_line(events_log_path, "signing in progress")
+            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "signing_in_progress"})
+            # Ensure ACME directory exists in the shared webroot (mounted to Nginx as /usr/share/nginx/html)
+            try:
+                os.makedirs("/pxxl/proxy/html/.well-known/acme-challenge", exist_ok=True)
+            except Exception:
+                pass
+            # Run certbot with webroot; require email or allow unsafe without email
+            try:
+                args = [
+                    "certbot", "certonly", "--webroot",
+                    "-w", "/pxxl/proxy/html",
+                    "-d", domain_clean,
+                    "-n", "--agree-tos",
+                ]
+                if req.email:
+                    args += ["-m", req.email]
+                else:
+                    args += ["--register-unsafely-without-email"]
+                res = subprocess.run(args, capture_output=True, text=True)
+                if res.returncode == 0:
+                    certbot = {"status": "issued"}
+                    # Copy live certs to /etc/ssl for nginx usage
+                    live_dir = os.path.join("/etc/letsencrypt/live", domain_clean)
+                    crt_src = os.path.join(live_dir, "fullchain.pem")
+                    key_src = os.path.join(live_dir, "privkey.pem")
+                    crt_dst = os.path.join("/etc/ssl/certs", f"{domain_clean}.crt")
+                    key_dst = os.path.join("/etc/ssl/private", f"{domain_clean}.key")
+                    try:
+                        if os.path.exists(crt_src) and os.path.exists(key_src):
+                            os.makedirs("/etc/ssl/certs", exist_ok=True)
+                            os.makedirs("/etc/ssl/private", exist_ok=True)
+                            shutil.copyfile(crt_src, crt_dst)
+                            shutil.copyfile(key_src, key_dst)
+                            cert_paths = {"crt": crt_dst, "key": key_dst}
+                        else:
+                            certbot = {"status": "issued", "warning": "letsencrypt files not found"}
+                    except Exception as e:
+                        certbot = {"status": "issued", "copy_error": str(e)}
+                else:
+                    certbot = {"status": "error", "returncode": str(res.returncode), "stderr": res.stderr}
+            except Exception as e:
+                certbot = {"status": "error", "error": str(e)}
+            # Optionally delete old certificate and reload
+            if req.old_certificate_path:
+                try:
+                    if os.path.exists(req.old_certificate_path):
+                        os.remove(req.old_certificate_path)
+                        _append_line(events_log_path, f"old certificate deleted {req.old_certificate_path}")
+                        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "old_certificate_deleted", "path": req.old_certificate_path})
+                        try:
+                            ns.reload_nginx()
+                        except Exception:
+                            pass
+                except Exception as e:
+                    _append_line(events_log_path, f"old certificate delete warning {e}")
+            # After issuance/copy, write HTTPS config
+            site_res = ns.create_or_update_site_in_dir(req.app_id, req.domain, internal_port, req.conf_dir, upstream_host=container_name, ssl=True)
+            reload_res = ns.reload_nginx()
+            _append_line(events_log_path, "signing completed")
+            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "signing_completed", "cert_paths": cert_paths or {}})
+            try:
+                summary_obj.update({"status": "completed", "stage": "signed", "cert_paths": cert_paths or {}})
+                _write_json(summary_path, summary_obj)
+            except Exception:
+                pass
+        else:
+            # Write config per requested mode (legacy None or http-only False)
+            site_res = ns.create_or_update_site_in_dir(req.app_id, req.domain, internal_port, req.conf_dir, upstream_host=container_name, ssl=req.ssl)
+            reload_res = ns.reload_nginx()
         # Stop old container if provided, then remove it
         old_stop = None
         old_remove = None
@@ -183,58 +302,22 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
             except Exception as e:
                 old_stop = old_stop or {"error": str(e)}
                 old_remove = old_remove or {"error": str(e)}
-        # Update build.info.json: stage -> upstream, status -> completed
-        try:
-            with open(summary_path, "r") as f:
-                summary_obj = json.load(f)
-        except Exception:
-            summary_obj = {}
-        upstream_meta = {
-            "domain": req.domain,
-            "conf_path": site_res.get("path"),
-            "port": internal_port,
-            "upstream_host": container_name,
-            "nginx_reload": reload_res,
-        }
-        try:
-            summary_obj.update({
-                "stage": "upstream",
-                "status": "completed",
-                "upstream": upstream_meta,
-            })
-            # Persist application record with container_id (resolve if missing)
-            container_id = summary_obj.get("container_id")
-            if not container_id:
-                try:
-                    details = ds.inspect_container_details(container_name)
-                    container_id = details.get("id")
-                except Exception:
-                    container_id = None
-            try:
-                db.upsert_application(req.app_id, container_id)
-            except Exception:
-                pass
-            with open(summary_path, "w") as f:
-                json.dump(summary_obj, f, indent=2)
-        except Exception:
-            pass
-        # Prune dangling images (images only)
         images_prune = None
         try:
             images_prune = ds.prune_images()
-        except Exception as e:
-            images_prune = {"error": str(e)}
+        except Exception:
+            pass
         return {
-            "stage": "upstream",
+            "stage": "signing_domain",
             "status": "completed",
-            "domain": req.domain,
-            "app_id": req.app_id,
             "conf_path": site_res.get("path"),
             "port": internal_port,
             "upstream_host": container_name,
             "nginx_reload": reload_res,
             "old_stop": old_stop,
             "old_remove": old_remove,
+            "certbot": certbot,
+            "cert_paths": cert_paths,
             "images_prune": images_prune,
         }
     except Exception as e:

@@ -490,10 +490,10 @@ def local_run_from_lz4(
     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] image loaded id={image_id or ''} tag={image_tag or ''}")
     _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "image_loaded", "image_id": image_id, "tag": image_tag})
 
-    # Cleanup: delete only .tar.gz if provided; keep .tar and other files
+    # Cleanup: delete compressed artifact (.lz4 or .gz) copied from SFTP; keep JSONs and Dockerfile
     try:
         removed = []
-        if os.path.exists(dest_lz4) and dest_lz4.endswith('.gz'):
+        if os.path.exists(dest_lz4) and (dest_lz4.endswith('.lz4') or dest_lz4.endswith('.gz')):
             os.remove(dest_lz4)
             removed.append(dest_lz4)
         _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] cleanup completed removed={removed}")
