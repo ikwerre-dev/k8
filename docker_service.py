@@ -2092,6 +2092,29 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "export_compression_error", "error": str(export_error)})
 
         # SFTP Transfer to production server if SFTP parameters are provided
+
+        # Write initial summary before SFTP transfer so runtime can read it
+        try:
+            if task_logs_dir:
+                summary_data = {
+                    "status": "building",
+                    "stage": "uploading",
+                    "image_id": image_id,
+                    "tag": tag,
+                    "dockerfile_used": df_arg or "Dockerfile",
+                    "inline": bool(dockerfile_content),
+                    "duration_sec": total_dur,
+                    "steps_detected": len(steps),
+                    "app_id": app_id,
+                    "build_args": build_args or {},
+                }
+                if compressed_image_path:
+                    summary_data["compressed_image_path"] = compressed_image_path
+                    summary_data["compressed_image_size_bytes"] = os.path.getsize(compressed_image_path) if os.path.exists(compressed_image_path) else 0
+                _write_json(summary_path, summary_data)
+        except Exception:
+            pass
+
         sftp_result = None
         if sftp_host and sftp_username and task_logs_dir:
             try:
