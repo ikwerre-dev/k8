@@ -412,24 +412,25 @@ def local_run_from_lz4(
         raise FileNotFoundError(msg)
 
     # Place a copy under /app/upload/{task_id} so recorded path reflects runtime location
-    basename = os.path.basename(lz4_for_decomp)
-    dest_lz4 = os.path.join(task_logs_dir, basename)
+    basename_src = os.path.basename(lz4_abs)
+    dest_lz4 = os.path.join(task_logs_dir, basename_src)
     try:
         if lz4_abs != dest_lz4:
             shutil.copyfile(lz4_abs, dest_lz4)
     except Exception as e:
         _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] copy warning {e}")
     lz4_for_decomp = dest_lz4 if os.path.exists(dest_lz4) else lz4_abs
+    basename_for_ops = os.path.basename(lz4_for_decomp)
+    compressionapthname = f"{task_id}+{basename_for_ops}"
 
     # Stage: decompiling
-    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling {os.path.basename(lz4_for_decomp)}")
-    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_start", "lz4_path": lz4_for_decomp})
+    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling {basename_for_ops}")
+    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_start", "lz4_path": lz4_for_decomp, "compressionapthname": compressionapthname})
     if emit:
-        emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "starting", "lz4": lz4_for_decomp})
+        emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "starting", "lz4": lz4_for_decomp, "compressionapthname": compressionapthname})
 
-    basename = os.path.basename(lz4_abs)
-    if basename.endswith('.gz'):
-        tar_path = os.path.join(task_logs_dir, basename[:-3])
+    if basename_for_ops.endswith('.gz'):
+        tar_path = os.path.join(task_logs_dir, basename_for_ops[:-3])
         if not tar_path.endswith('.tar'):
             tar_path += '.tar'
         try:
@@ -451,7 +452,7 @@ def local_run_from_lz4(
                 emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "error", "error": str(e)})
             raise
     else:
-        tar_path = os.path.join(task_logs_dir, basename.replace('.lz4', ''))
+        tar_path = os.path.join(task_logs_dir, basename_for_ops.replace('.lz4', ''))
         if not tar_path.endswith('.tar'):
             tar_path += '.tar'
         try:
@@ -600,6 +601,7 @@ def local_run_from_lz4(
             "end_check_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(end_ts)),
             "localrun": {
                 "lz4_path": lz4_for_decomp,
+                "compressionapthname": compressionapthname,
                 "tar_path": tar_path,
                 "image_id": image_id,
                 "image_tag": image_tag,
