@@ -476,9 +476,43 @@ def local_run_from_lz4(
                 emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "error", "error": str(e)})
             raise
 
-    # Load image from tar
+    # Load image from tar with force reload to avoid Docker caching
     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] loading image from tar")
     _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "image_load_start", "tar_path": tar_path})
+    
+    # First, inspect the tar to get the image tag/name that will be loaded
+    temp_image_tags = []
+    try:
+        with tarfile.open(tar_path, 'r') as tar:
+            # Look for manifest.json to get image tags
+            try:
+                manifest_member = tar.getmember('manifest.json')
+                manifest_data = tar.extractfile(manifest_member).read()
+                manifest = json.loads(manifest_data.decode('utf-8'))
+                for entry in manifest:
+                    if 'RepoTags' in entry and entry['RepoTags']:
+                        temp_image_tags.extend(entry['RepoTags'])
+            except Exception:
+                pass
+    except Exception:
+        pass
+    
+    # Remove existing images with the same tags to force fresh loading
+    removed_cached_images = []
+    for tag in temp_image_tags:
+        try:
+            existing_img = client.images.get(tag)
+            client.images.remove(existing_img.id, force=True)
+            removed_cached_images.append(tag)
+            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] removed cached image tag={tag}")
+        except Exception:
+            # Image doesn't exist or couldn't be removed, which is fine
+            pass
+    
+    if removed_cached_images:
+        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cached_images_removed", "tags": removed_cached_images})
+    
+    # Now load the fresh image from tar
     with open(tar_path, "rb") as f:
         img_list = client.images.load(f.read())
     image_id = None
@@ -491,7 +525,7 @@ def local_run_from_lz4(
     except Exception:
         pass
     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] image loaded id={image_id or ''} tag={image_tag or ''}")
-    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "image_loaded", "image_id": image_id, "tag": image_tag})
+    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "image_loaded", "image_id": image_id, "tag": image_tag, "force_reloaded": len(removed_cached_images) > 0})
 
     # Cleanup: delete compressed artifact (.lz4 or .gz) copied from SFTP; keep JSONs and Dockerfile
     try:
