@@ -28,7 +28,7 @@ This API manages Docker images and containers, streams logs for long-running tas
 - `POST /docker/localrun` – Decompress a local `.lz4` Docker image tarball, load it, and run
   - Body:
     - `lz4_path` (string): Local relative path to the `.lz4` file (e.g., `./dist/app.tar.lz4`).
-    - `task_id` (string): Task/build ID; used to write logs in `builds/{task_id}`.
+    - `task_id` (string): Task/build ID; local run writes logs under `/upload/pxxl/{task_id}` when available, otherwise falls back to `./builds/{task_id}`.
     - `app_id` (string, optional): App identifier for container naming. If provided, container name becomes `{app_id}-{task_id}`.
     - `ports` (object, optional): Port bindings, e.g., `{ "8000/tcp": 8000 }`.
     - `env` (object, optional): Env variables map.
@@ -38,7 +38,7 @@ This API manages Docker images and containers, streams logs for long-running tas
     - `cpuset` (string, optional): CPU set (e.g., `"0-2"`).
     - `memory` (string, optional): Memory limit (e.g., `"512m"`, `"1g"`).
   - Behavior:
-    - Writes logs to `builds/{task_id}` including `events.log`, `error.log`, and `build.jsonl`.
+    - Writes logs to `/upload/pxxl/{task_id}` (or `/pxxl/upload/{task_id}`) when present; otherwise falls back to `./builds/{task_id}` including `events.log`, `error.log`, and `build.jsonl`.
     - Uses stages: `decompiling` (decompress), then `running` (start container).
     - Updates `build.info.json` with `status: "building"`, current `stage`, `container_id`, and `container_name`.
     - Container naming: Uses `{app_id}-{task_id}` format when `app_id` is provided and `name` is not specified.
@@ -76,14 +76,16 @@ This API manages Docker images and containers, streams logs for long-running tas
     - `app_id` (string, optional): Used to annotate events and default tag.
   - Response: `{ "task_id": "docker_build-xxxxxxxxxx", "status": "started" }`
   - Retrieve logs: `GET /tasks/logs/{task_id}`
-- `POST /docker/tag` – `{ "source": "myimage:latest", "repo": "user/myimage", "tag": "latest" }`
-- `POST /docker/login` – `{ "username": "user", "password": "pass", "registry": "https://index.docker.io/v1/" }`
-- `POST /docker/push` – `{ "repo_tag": "user/myimage:latest" }`
-- `POST /docker/pull` – `{ "name": "nginx", "tag": "latest" }`
-- `POST /docker/save` – `{ "repo_tag": "user/myimage:latest", "tar_path": "./myimage.tar" }`
-- `POST /docker/load` – `{ "tar_path": "./myimage.tar" }`
-- `GET /docker/images` – List images
-- `POST /docker/rmi` – Remove image `{ "id_or_name": "user/myimage:latest", "force": true }`
+
+### Logs Retrieval
+- `GET /tasks/logs/{task_id}?server=build&tail=200`
+  - Reads build logs from the build server path: `./builds/{task_id}`.
+- `GET /tasks/logs/{task_id}?server=runtime&tail=200`
+  - Reads runtime logs from `/uploads/{task_id}`.
+- `GET /tasks/logs/{task_id}?tail=200`
+  - Reads runtime logs from `/app/upload/{task_id}` when available.
+  - Fallbacks: `/upload/pxxl/{task_id}`, `/pxxl/upload/{task_id}`, or `/uploads/{task_id}` if present; otherwise falls back to `./builds/{task_id}`.
+  - Returns aggregated `build.log` (raw), `build.jsonl` (structured), `events.log`, `error.log`, plus metadata from `build.info.json` and `dockerfile.parsed.json`.
 
 ## Containers
 - `POST /docker/run` – Simple run
@@ -180,5 +182,5 @@ This API manages Docker images and containers, streams logs for long-running tas
     - Re-runs the container with the same name and environment, binding `new_port`
     - Updates `build.info.json` (`host_port`, `ports_requested`)
     - Updates `{conf_dir}/{app_id}.conf` to proxy to `new_port` and reloads Nginx
-    - Returns `{ stage: "update_port", status: "completed", new_port, container, nginx_reload }`
-    - Returns `{ stage: "signing_domain", status: "completed", conf_path, port, nginx_reload, old_stop }`
+  - Returns `{ stage: "update_port", status: "completed", new_port, container, nginx_reload }`
+- Returns `{ stage: "signing_domain", status: "completed", conf_path, port, nginx_reload, old_stop }`

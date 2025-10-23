@@ -455,7 +455,7 @@ def pipeline_html_site(req: HtmlSitePipelineRequest):
 
 
 @app.get("/tasks/logs/{task_id}")
-def tasks_logs(task_id: str, tail: int = 200):
+def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
     try:
         import json
         from task_registry import get
@@ -464,8 +464,20 @@ def tasks_logs(task_id: str, tail: int = 200):
         t = get(task_id)
         status = t.get("status") if isinstance(t, dict) else "unknown"
         
-        # Enhanced: Load comprehensive build information from builds directory
-        builds_dir = os.path.join("/pxxl/upload", task_id)
+        # Resolve base directory based on server param
+        base_dir = None
+        if server and str(server).lower() == "build":
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "builds"))
+        else:
+            # Prefer runtime upload locations; fallback to builds if none exist
+            for candidate in ["/app/upload", "/upload/pxxl", "/pxxl/upload"]:
+                if os.path.isdir(candidate):
+                    base_dir = candidate
+                    break
+            if not base_dir:
+                base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "builds"))
+        
+        builds_dir = os.path.join(base_dir, task_id)
         build_info = {
             "task_id": task_id,
             "status": status,
@@ -492,22 +504,59 @@ def tasks_logs(task_id: str, tail: int = 200):
                 except Exception:
                     pass
             
-            # Load build.info.json (build summary/metadata)
+            # Load build.jsonl (structured build events)
+            structured_path = os.path.join(builds_dir, "build.jsonl")
+            if os.path.exists(structured_path):
+                try:
+                    entries = []
+                    with open(structured_path, "r") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                entries.append(json.loads(line))
+                            except Exception:
+                                entries.append({"text": line})
+                    build_info["build_logs"]["structured"] = entries[-tail:]
+                    build_info["build_logs"]["structured_total_lines"] = len(entries)
+                except Exception:
+                    pass
+            
+            # Load events.log
+            events_log_path = os.path.join(builds_dir, "events.log")
+            if os.path.exists(events_log_path):
+                try:
+                    with open(events_log_path, "r") as f:
+                        event_lines = f.readlines()
+                        build_info["build_logs"]["events"] = [line.rstrip() for line in event_lines[-tail:]]
+                        build_info["build_logs"]["events_total_lines"] = len(event_lines)
+                except Exception:
+                    pass
+            
+            # Load error.log
+            error_log_path = os.path.join(builds_dir, "error.log")
+            if os.path.exists(error_log_path):
+                try:
+                    with open(error_log_path, "r") as f:
+                        error_lines = f.readlines()
+                        build_info["build_logs"]["error"] = [line.rstrip() for line in error_lines[-tail:]]
+                        build_info["build_logs"]["error_total_lines"] = len(error_lines)
+                except Exception:
+                    pass
+            
+            # Load build.info.json and parsed Dockerfile metadata
             summary_path = os.path.join(builds_dir, "build.info.json")
             if os.path.exists(summary_path):
                 try:
                     with open(summary_path, "r") as f:
                         summary_obj = json.load(f)
                         build_info["build_metadata"]["summary"] = summary_obj
-                        # Override/augment top-level fields from summary
-                        build_info["status"] = summary_obj.get("status", build_info["status"])
-                        for key in ["healthcheck", "healthchecksstatus", "isChecking", "healthcheck_time", "start_check_time", "end_check_time"]:
-                            if key in summary_obj:
-                                build_info[key] = summary_obj[key]
+                        inferred = summary_obj.get("status") or summary_obj.get("stage")
+                        if not build_info.get("status") or build_info.get("status") == "unknown":
+                            build_info["status"] = inferred or "unknown"
                 except Exception:
                     pass
-            
-            # Load dockerfile.parsed.json (parsed Dockerfile info)
             parsed_dockerfile_path = os.path.join(builds_dir, "dockerfile.parsed.json")
             if os.path.exists(parsed_dockerfile_path):
                 try:
@@ -515,15 +564,8 @@ def tasks_logs(task_id: str, tail: int = 200):
                         build_info["build_metadata"]["dockerfile_parsed"] = json.load(f)
                 except Exception:
                     pass
-            
-            # Load Dockerfile.used (actual Dockerfile content used)
-            dockerfile_used_path = os.path.join(builds_dir, "Dockerfile.used")
-            if os.path.exists(dockerfile_used_path):
-                try:
-                    with open(dockerfile_used_path, "r") as f:
-                        build_info["build_metadata"]["dockerfile_content"] = f.read()
-                except Exception:
-                    pass
+        else:
+            build_info["error"] = f"logs directory not found: {builds_dir}"
         
         return build_info
     except Exception as e:

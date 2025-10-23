@@ -358,7 +358,7 @@ def local_run_from_lz4(
     events_log_path = os.path.join(task_logs_dir, "events.log")
     error_log_path = os.path.join(task_logs_dir, "error.log")
     summary_path = os.path.join(task_logs_dir, "build.info.json")
-    # Prefer app_id from build.info.json over payload
+    # Prefer app_id from build.info.json over payload 
     try:
         with open(summary_path, "r") as f:
             _summary_obj = json.load(f)
@@ -1605,7 +1605,7 @@ def transfer_build_to_sftp(build_dir: str, task_id: str, sftp_host: str, sftp_us
         ensure_remote_dirs(remote_base_dir)
         ensure_remote_dirs(remote_dir)
         
-        # Transfer all files and directories recursively
+        # Transfer all files and directories recursively.     
         _emit_log(f"Transferring build directory from {build_dir} to {remote_dir}")
         
         def upload_recursive(local_path: str, remote_path: str):
