@@ -568,11 +568,11 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
                     except Exception:
                         continue
             if summary_obj:
-                # If server=runtime and stage is 'uploading', present it as 'updated'
+                # If server=runtime and stage is 'uploading', present it as 'uploaded'
                 try:
                     if server and str(server).lower() == "runtime":
                         if (summary_obj.get("stage") or "") == "uploading":
-                            summary_obj["stage"] = "updated"
+                            summary_obj["stage"] = "uploaded"
                 except Exception:
                     pass
                 build_info["build_metadata"]["summary"] = summary_obj
