@@ -468,9 +468,11 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
         base_dir = None
         if server and str(server).lower() == "build":
             base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "builds"))
+        elif server and str(server).lower() == "runtime":
+            base_dir = "/uploads"
         else:
             # Prefer runtime upload locations; fallback to builds if none exist
-            for candidate in ["/app/upload", "/upload/pxxl", "/pxxl/upload"]:
+            for candidate in ["/app/upload", "/upload/pxxl", "/pxxl/upload", "/uploads"]:
                 if os.path.isdir(candidate):
                     base_dir = candidate
                     break
@@ -545,18 +547,40 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
                 except Exception:
                     pass
             
-            # Load build.info.json and parsed Dockerfile metadata
-            summary_path = os.path.join(builds_dir, "build.info.json")
-            if os.path.exists(summary_path):
+            # Load build.info.json (summary) with fallbacks across known runtime dirs
+            summary_obj = None
+            summary_candidates = [
+                os.path.join(builds_dir, "build.info.json"),
+                os.path.join(builds_dir, "summary.json"),
+            ]
+            # If server=runtime or summary not found, probe other runtime locations
+            if server and str(server).lower() == "runtime":
+                for alt in ["/app/upload", "/upload/pxxl", "/pxxl/upload"]:
+                    summary_candidates.append(os.path.join(alt, task_id, "build.info.json"))
+                    summary_candidates.append(os.path.join(alt, task_id, "summary.json"))
+            # Try reading first available summary
+            for sp in summary_candidates:
+                if os.path.exists(sp):
+                    try:
+                        with open(sp, "r") as f:
+                            summary_obj = json.load(f)
+                        break
+                    except Exception:
+                        continue
+            if summary_obj:
+                # If server=runtime and stage is 'uploading', present it as 'updated'
                 try:
-                    with open(summary_path, "r") as f:
-                        summary_obj = json.load(f)
-                        build_info["build_metadata"]["summary"] = summary_obj
-                        inferred = summary_obj.get("status") or summary_obj.get("stage")
-                        if not build_info.get("status") or build_info.get("status") == "unknown":
-                            build_info["status"] = inferred or "unknown"
+                    if server and str(server).lower() == "runtime":
+                        if (summary_obj.get("stage") or "") == "uploading":
+                            summary_obj["stage"] = "updated"
                 except Exception:
                     pass
+                build_info["build_metadata"]["summary"] = summary_obj
+                inferred = summary_obj.get("status") or summary_obj.get("stage")
+                if not build_info.get("status") or build_info.get("status") == "unknown":
+                    build_info["status"] = inferred or "unknown"
+            
+            # Load parsed Dockerfile metadata
             parsed_dockerfile_path = os.path.join(builds_dir, "dockerfile.parsed.json")
             if os.path.exists(parsed_dockerfile_path):
                 try:
