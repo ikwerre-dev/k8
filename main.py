@@ -496,57 +496,82 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
             except Exception:
                 pass
             
-            # Load build.log (raw build output)
-            build_log_path = os.path.join(builds_dir, "build.log")
-            if os.path.exists(build_log_path):
-                try:
-                    with open(build_log_path, "r") as f:
-                        build_lines = f.readlines()
-                        build_info["build_logs"]["raw"] = [line.rstrip() for line in build_lines[-tail:]]
-                        build_info["build_logs"]["raw_total_lines"] = len(build_lines)
-                except Exception:
-                    pass
+            # Load build.log (raw build output) with fallbacks to local builds directory
+            build_log_candidates = [
+                os.path.join(builds_dir, "build.log"),
+            ]
+            # If we are looking at runtime, also try local builds folder as a fallback
+            if server and str(server).lower() == "runtime":
+                build_log_candidates.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "builds", task_id, "build.log")))
+            for blp in build_log_candidates:
+                if os.path.exists(blp):
+                    try:
+                        with open(blp, "r") as f:
+                            build_lines = f.readlines()
+                            build_info["build_logs"]["raw"] = [line.rstrip() for line in build_lines[-tail:]]
+                            build_info["build_logs"]["raw_total_lines"] = len(build_lines)
+                        break
+                    except Exception:
+                        continue
             
-            # Load build.jsonl (structured build events)
-            structured_path = os.path.join(builds_dir, "build.jsonl")
-            if os.path.exists(structured_path):
-                try:
-                    entries = []
-                    with open(structured_path, "r") as f:
-                        for line in f:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                entries.append(json.loads(line))
-                            except Exception:
-                                entries.append({"text": line})
-                    build_info["build_logs"]["structured"] = entries[-tail:]
-                    build_info["build_logs"]["structured_total_lines"] = len(entries)
-                except Exception:
-                    pass
+            # Load build.jsonl (structured build events) with fallbacks
+            structured_candidates = [
+                os.path.join(builds_dir, "build.jsonl"),
+            ]
+            if server and str(server).lower() == "runtime":
+                structured_candidates.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "builds", task_id, "build.jsonl")))
+            for sp in structured_candidates:
+                if os.path.exists(sp):
+                    try:
+                        entries = []
+                        with open(sp, "r") as f:
+                            for line in f:
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                try:
+                                    entries.append(json.loads(line))
+                                except Exception:
+                                    entries.append({"text": line})
+                        build_info["build_logs"]["structured"] = entries[-tail:]
+                        build_info["build_logs"]["structured_total_lines"] = len(entries)
+                        break
+                    except Exception:
+                        continue
             
-            # Load events.log
-            events_log_path = os.path.join(builds_dir, "events.log")
-            if os.path.exists(events_log_path):
-                try:
-                    with open(events_log_path, "r") as f:
-                        event_lines = f.readlines()
-                        build_info["build_logs"]["events"] = [line.rstrip() for line in event_lines[-tail:]]
-                        build_info["build_logs"]["events_total_lines"] = len(event_lines)
-                except Exception:
-                    pass
+            # Load events.log with fallbacks
+            events_candidates = [
+                os.path.join(builds_dir, "events.log"),
+            ]
+            if server and str(server).lower() == "runtime":
+                events_candidates.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "builds", task_id, "events.log")))
+            for ep in events_candidates:
+                if os.path.exists(ep):
+                    try:
+                        with open(ep, "r") as f:
+                            event_lines = f.readlines()
+                            build_info["build_logs"]["events"] = [line.rstrip() for line in event_lines[-tail:]]
+                            build_info["build_logs"]["events_total_lines"] = len(event_lines)
+                        break
+                    except Exception:
+                        continue
             
-            # Load error.log
-            error_log_path = os.path.join(builds_dir, "error.log")
-            if os.path.exists(error_log_path):
-                try:
-                    with open(error_log_path, "r") as f:
-                        error_lines = f.readlines()
-                        build_info["build_logs"]["error"] = [line.rstrip() for line in error_lines[-tail:]]
-                        build_info["build_logs"]["error_total_lines"] = len(error_lines)
-                except Exception:
-                    pass
+            # Load error.log with fallbacks
+            error_candidates = [
+                os.path.join(builds_dir, "error.log"),
+            ]
+            if server and str(server).lower() == "runtime":
+                error_candidates.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "builds", task_id, "error.log")))
+            for elp in error_candidates:
+                if os.path.exists(elp):
+                    try:
+                        with open(elp, "r") as f:
+                            error_lines = f.readlines()
+                            build_info["build_logs"]["error"] = [line.rstrip() for line in error_lines[-tail:]]
+                            build_info["build_logs"]["error_total_lines"] = len(error_lines)
+                        break
+                    except Exception:
+                        continue
             
             # Load build.info.json (summary) with fallbacks across known runtime dirs
             summary_obj = None
