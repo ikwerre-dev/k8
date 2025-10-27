@@ -547,7 +547,11 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
                     try:
                         with open(blp, "r") as f:
                             build_lines = f.readlines()
-                            build_info["build_logs"]["raw"] = [line.rstrip() for line in build_lines[-tail:]]
+                            if tail is None or int(tail) <= 0:
+                                slice_lines = build_lines
+                            else:
+                                slice_lines = build_lines[-int(tail):]
+                            build_info["build_logs"]["raw"] = [line.rstrip() for line in slice_lines]
                             build_info["build_logs"]["raw_total_lines"] = len(build_lines)
                         break
                     except Exception:
@@ -572,7 +576,11 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
                                     entries.append(json.loads(line))
                                 except Exception:
                                     entries.append({"text": line})
-                        build_info["build_logs"]["structured"] = entries[-tail:]
+                        if tail is None or int(tail) <= 0:
+                            slice_entries = entries
+                        else:
+                            slice_entries = entries[-int(tail):]
+                        build_info["build_logs"]["structured"] = slice_entries
                         build_info["build_logs"]["structured_total_lines"] = len(entries)
                         break
                     except Exception:
@@ -589,7 +597,11 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
                     try:
                         with open(ep, "r") as f:
                             event_lines = f.readlines()
-                            build_info["build_logs"]["events"] = [line.rstrip() for line in event_lines[-tail:]]
+                            if tail is None or int(tail) <= 0:
+                                slice_events = event_lines
+                            else:
+                                slice_events = event_lines[-int(tail):]
+                            build_info["build_logs"]["events"] = [line.rstrip() for line in slice_events]
                             build_info["build_logs"]["events_total_lines"] = len(event_lines)
                         break
                     except Exception:
@@ -606,7 +618,11 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
                     try:
                         with open(elp, "r") as f:
                             error_lines = f.readlines()
-                            build_info["build_logs"]["error"] = [line.rstrip() for line in error_lines[-tail:]]
+                            if tail is None or int(tail) <= 0:
+                                slice_error = error_lines
+                            else:
+                                slice_error = error_lines[-int(tail):]
+                            build_info["build_logs"]["error"] = [line.rstrip() for line in slice_error]
                             build_info["build_logs"]["error_total_lines"] = len(error_lines)
                         break
                     except Exception:

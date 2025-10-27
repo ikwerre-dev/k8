@@ -1953,7 +1953,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             if isinstance(chunk, dict):
                 entry["keys"] = list(chunk.keys())
 
-            # Detect unrecoverable build failures and stop immediately
+            # Detect unrecoverable build failures but continue streaming to capture all logs
             try:
                 if (entry_type == "error") or ("returned a non-zero code" in (raw_text or "")):
                     build_failed = True
@@ -1971,8 +1971,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                             })
                         except Exception:
                             pass
-                    # Break out of the streaming loop; we'll raise after closing step
-                    break
+                    # Do not break; allow remaining chunks to flush so raw logs are complete
             except Exception:
                 pass
 
