@@ -1739,7 +1739,7 @@ def transfer_build_to_sftp(build_dir: str, task_id: str, sftp_host: str, sftp_us
             "sftp_port": sftp_port
         }
 
-def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile: Optional[str] = None, build_args: Optional[Dict[str, str]] = None, task_id: Optional[str] = None, override_log_endpoint: Optional[str] = None, dockerfile_content: Optional[str] = None, dockerfile_name: Optional[str] = None, cleanup: Optional[bool] = True, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None, sftp_host: Optional[str] = None, sftp_username: Optional[str] = None, sftp_password: Optional[str] = None, sftp_port: Optional[int] = 22) -> dict:
+def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile: Optional[str] = None, build_args: Optional[Dict[str, str]] = None, task_id: Optional[str] = None, override_log_endpoint: Optional[str] = None, dockerfile_content: Optional[str] = None, dockerfile_name: Optional[str] = None, cleanup: Optional[bool] = True, nocache: Optional[bool] = False, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None, sftp_host: Optional[str] = None, sftp_username: Optional[str] = None, sftp_password: Optional[str] = None, sftp_port: Optional[int] = 22) -> dict:
     client = get_client()
     endpoint = override_log_endpoint or get_log_endpoint()
     headers = get_auth_header()
@@ -1888,12 +1888,13 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 pass
         _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] build starting dockerfile={df_arg or 'Dockerfile'} inline={bool(dockerfile_content)} app_id={app_id or ''}")
         _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] build starting dockerfile={df_arg or 'Dockerfile'} inline={bool(dockerfile_content)} app_id={app_id or ''}")
-        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "build_start", "tag": tag, "dockerfile": df_arg or "Dockerfile", "inline": bool(dockerfile_content), "app_id": app_id, "build_args": build_args or {}})
+        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "build_start", "tag": tag, "dockerfile": df_arg or "Dockerfile", "inline": bool(dockerfile_content), "app_id": app_id, "build_args": build_args or {}, "nocache": bool(nocache)})
         # Log build invocation details
         _append_json(build_structured_path, {
             "ts": _ts(), "level": "info", "event": "invocation",
             "context_path": context_path, "dockerfile": df_arg or "Dockerfile",
             "tag": tag, "build_args": build_args or {}, "app_id": app_id,
+            "nocache": bool(nocache),
         })
 
         # Use low-level API to stream logs in real-time
@@ -1905,6 +1906,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             rm=True,
             forcerm=True,
             decode=True,
+            nocache=bool(nocache),
         )
         step_count = 0
         build_failed = False
@@ -1923,6 +1925,9 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                     entry_type = "stdout"
                 elif "errorDetail" in chunk:
                     raw_text = chunk.get("errorDetail", {}).get("message") or chunk.get("error") or str(chunk)
+                    entry_type = "error"
+                elif "error" in chunk:
+                    raw_text = chunk.get("error")
                     entry_type = "error"
                 else:
                     raw_text = str(chunk)
@@ -1953,9 +1958,10 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             if isinstance(chunk, dict):
                 entry["keys"] = list(chunk.keys())
 
-            # Detect unrecoverable build failures but continue streaming to capture all logs
+            # Detect unrecoverable build failures ONLY on Docker API error chunks,
+            # and continue streaming to capture all remaining logs
             try:
-                if (entry_type == "error") or ("returned a non-zero code" in (raw_text or "")):
+                if entry_type == "error":
                     build_failed = True
                     build_failure_msg = raw_text
                     _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "build_failed_detected", "message": raw_text})
@@ -2109,6 +2115,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                         "tag": tag,
                         "dockerfile_used": df_arg or "Dockerfile",
                         "inline": bool(dockerfile_content),
+                        "nocache": bool(nocache),
                         "duration_sec": total_dur,
                         "steps_detected": len(steps),
                         "app_id": app_id,
@@ -2387,6 +2394,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                     "tag": tag,
                     "dockerfile_used": df_arg or "Dockerfile",
                     "inline": bool(dockerfile_content),
+                    "nocache": bool(nocache),
                     "duration_sec": round(time.time() - build_started, 3),
                     "steps_detected": len(steps),
                     "app_id": app_id,

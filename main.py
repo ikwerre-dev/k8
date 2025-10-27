@@ -375,6 +375,7 @@ class BuildStartRequest(BaseModel):
     dockerfile_name: Optional[str] = None
     build_args: Optional[Dict[str, str]] = None
     cleanup: Optional[bool] = True
+    nocache: Optional[bool] = False
     tag: Optional[str] = None
     app_id: Optional[str] = None
     # SFTP deployment parameters
@@ -410,6 +411,7 @@ def docker_build_start(req: BuildStartRequest):
                     dockerfile_content=req.dockerfile_content,
                     dockerfile_name=req.dockerfile_name,
                     cleanup=req.cleanup,
+                    nocache=req.nocache,
                     emit=_emit,
                     app_id=req.app_id,
                     sftp_host=req.sftp_host,
@@ -436,6 +438,7 @@ class BuildStreamRequest(BaseModel):
     dockerfile_content: Optional[str] = None
     dockerfile_name: Optional[str] = None
     cleanup: Optional[bool] = True
+    nocache: Optional[bool] = False
 
 class TaskRunStreamRequest(BaseModel):
     cmd: str
@@ -456,6 +459,7 @@ def docker_build_stream(req: BuildStreamRequest):
             dockerfile_content=req.dockerfile_content,
             dockerfile_name=req.dockerfile_name,
             cleanup=req.cleanup,
+            nocache=req.nocache,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

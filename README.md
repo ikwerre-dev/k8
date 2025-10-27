@@ -18,11 +18,16 @@ This API manages Docker images and containers, streams logs for long-running tas
     - `cleanup` (bool, optional): Remove the written Dockerfile after build (default true).
     - `build_args` (object, optional): Build args.
     - `task_id` (string, optional): Correlation ID.
+    - `nocache` (bool, optional): Disable Docker layer cache (default false).
   - Behavior:
     - If `dockerfile_content` is provided, it is written to `context_path` as `dockerfile_name` (default `Dockerfile`), then used for the build. Non-default names are passed to the Docker API via `dockerfile`.
     - Emits metadata in stream payloads: `dockerfile` used and whether `inline` content was used.
     - Collects and returns the tail of logs for convenience.
 - `POST /docker/build/start` – Start a build asynchronously and stream logs to task registry
+  - Body additions:
+    - `nocache` (bool, optional): Disable Docker layer cache (default false).
+  - Notes:
+    - When `nocache` is `true`, the build uses `docker build --no-cache` semantics via the Docker API.
 
 ## Local Run
 - `POST /docker/localrun` – Decompress a local `.lz4` Docker image tarball, load it, and run
