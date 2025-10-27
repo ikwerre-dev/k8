@@ -122,12 +122,21 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
         os.makedirs(builds_dir, exist_ok=True)
         import time
         events_log_path = os.path.join(builds_dir, "events.log")
+        build_log_path = os.path.join(builds_dir, "build.log")
         build_structured_path = os.path.join(builds_dir, "build.jsonl")
+        sign_error = False
         def _append_line(path: str, msg: str):
             try:
                 now = time.strftime('%Y-%m-%d %H:%M:%S')
                 with open(path, "a") as f:
                     f.write(f"[{now}] {msg}\n")
+            except Exception:
+                pass
+        def _append_build(path: str, msg: str, level: str = "info"):
+            try:
+                prefix = "[ERROR]" if str(level).lower() == "error" else "[INFO ]"
+                with open(path, "a") as f:
+                    f.write(f"{prefix} {msg}\n")
             except Exception:
                 pass
         def _append_json(path: str, obj: dict):
@@ -145,6 +154,7 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
         def _ts() -> str:
             return time.strftime('%Y-%m-%dT%H:%M:%S')
         _append_line(events_log_path, "uploading completed")
+        _append_build(build_log_path, "uploading completed")
         _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "upload_completed"})
         # Infer app_id if missing
         if not req.app_id:
@@ -177,14 +187,16 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
 
         # Only update status and logs; no Nginx or Certbot actions
         try:
-            summary_obj.update({"status": "signing", "stage": "signing"})
+            summary_obj.update({"status": "running", "stage": "signing"})
             _write_json(summary_path, summary_obj)
         except Exception:
             pass
         _append_line(events_log_path, "signing in progress")
+        _append_build(build_log_path, "signing in progress")
         _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "signing_in_progress"})
 
         _append_line(events_log_path, "signing completed")
+        _append_build(build_log_path, "signing completed")
         _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "signing_completed"})
         try:
             summary_obj.update({"status": "completed", "stage": "signed"})
@@ -198,12 +210,22 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
         if req.old_container:
             try:
                 old_stop = ds.stop_container(req.old_container)
+                _append_line(events_log_path, f"stopped old container {req.old_container}")
+                _append_build(build_log_path, f"stopped old container {req.old_container}")
             except Exception as e:
                 old_stop = {"error": str(e)}
+                _append_line(events_log_path, f"stop old container error: {e}")
+                _append_build(build_log_path, f"stop old container error: {e}", level="error")
+                sign_error = True
             try:
                 old_remove = ds.remove_container(req.old_container, force=True)
+                _append_line(events_log_path, f"removed old container {req.old_container}")
+                _append_build(build_log_path, f"removed old container {req.old_container}")
             except Exception as e:
                 old_remove = {"error": str(e)}
+                _append_line(events_log_path, f"remove old container error: {e}")
+                _append_build(build_log_path, f"remove old container error: {e}", level="error")
+                sign_error = True
         elif req.old_task_id:
             try:
                 old_summary_path, old_builds_dir = _resolve_summary_path(req.old_task_id)
@@ -217,18 +239,35 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
                     if old_cid:
                         try:
                             old_stop = ds.stop_container(old_cid)
+                            _append_line(events_log_path, f"stopped old container {old_cid}")
+                            _append_build(build_log_path, f"stopped old container {old_cid}")
                         except Exception as e:
                             old_stop = {"error": str(e)}
+                            _append_line(events_log_path, f"stop old container error: {e}")
+                            _append_build(build_log_path, f"stop old container error: {e}", level="error")
+                            sign_error = True
                         try:
                             old_remove = ds.remove_container(old_cid, force=True)
+                            _append_line(events_log_path, f"removed old container {old_cid}")
+                            _append_build(build_log_path, f"removed old container {old_cid}")
                         except Exception as e:
                             old_remove = {"error": str(e)}
+                            _append_line(events_log_path, f"remove old container error: {e}")
+                            _append_build(build_log_path, f"remove old container error: {e}", level="error")
+                            sign_error = True
             except Exception as e:
                 old_stop = old_stop or {"error": str(e)}
                 old_remove = old_remove or {"error": str(e)}
         images_prune = None
         try:
             images_prune = ds.prune_images()
+        except Exception:
+            pass
+        # After signing-related actions, finalize status: remain running until here
+        try:
+            summary_obj.update({"status": ("error" if sign_error else "completed"), "stage": "signed"})
+            with open(summary_path, "w") as f:
+                json.dump(summary_obj, f, indent=2)
         except Exception:
             pass
         return {
@@ -603,8 +642,11 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
                     pass
                 build_info["build_metadata"]["summary"] = summary_obj
                 inferred = summary_obj.get("status") or summary_obj.get("stage")
-                if not build_info.get("status") or build_info.get("status") == "unknown":
-                    build_info["status"] = inferred or "unknown"
+                # Always reflect summary status precisely; task registry is secondary
+                try:
+                    build_info["status"] = inferred or build_info.get("status") or "unknown"
+                except Exception:
+                    build_info["status"] = inferred or build_info.get("status") or "unknown"
                 # Surface stage and SFTP deployment details at top-level for easy consumption
                 try:
                     build_info["stage"] = summary_obj.get("stage")

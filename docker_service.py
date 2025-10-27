@@ -428,6 +428,7 @@ def local_run_from_lz4(
 
     # Stage: decompiling
     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling {basename_for_ops}")
+    _append_line(build_log_path, f"[INFO ] decompiling {basename_for_ops}")
     _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_start", "lz4_path": lz4_for_decomp, "compressionapthname": compressionapthname})
     if emit:
         emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "starting", "lz4": lz4_for_decomp, "compressionapthname": compressionapthname})
@@ -443,6 +444,7 @@ def local_run_from_lz4(
             if res.returncode != 0:
                 raise RuntimeError(f"gzip decompression failed: {res.stderr.decode('utf-8', errors='ignore')}")
             _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling completed output={tar_path}")
+            _append_line(build_log_path, f"[INFO ] decompiling completed output={tar_path}")
             _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_completed", "tar_path": tar_path})
             if emit:
                 emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "completed", "output": tar_path})
@@ -450,6 +452,7 @@ def local_run_from_lz4(
             msg = f"decompression error: {e}"
             _append_line(error_log_path, msg)
             _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+            _append_line(build_log_path, f"[ERROR] {msg}")
             _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "decompiling_error", "error": str(e)})
             if emit:
                 emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "error", "error": str(e)})
@@ -464,6 +467,7 @@ def local_run_from_lz4(
             if res.returncode != 0:
                 raise RuntimeError(f"lz4 decompression failed: {res.stderr}")
             _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling completed output={tar_path}")
+            _append_line(build_log_path, f"[INFO ] decompiling completed output={tar_path}")
             _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_completed", "tar_path": tar_path})
             if emit:
                 emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "completed", "output": tar_path})
@@ -471,6 +475,7 @@ def local_run_from_lz4(
             msg = f"decompression error: {e}"
             _append_line(error_log_path, msg)
             _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+            _append_line(build_log_path, f"[ERROR] {msg}")
             _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "decompiling_error", "error": str(e)})
             if emit:
                 emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "error", "error": str(e)})
@@ -478,6 +483,7 @@ def local_run_from_lz4(
 
     # Load image from tar with force reload to avoid Docker caching
     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] loading image from tar")
+    _append_line(build_log_path, f"[INFO ] loading image from tar path={tar_path}")
     _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "image_load_start", "tar_path": tar_path})
     
     # First, inspect the tar to get the image tag/name that will be loaded
@@ -505,6 +511,7 @@ def local_run_from_lz4(
             client.images.remove(existing_img.id, force=True)
             removed_cached_images.append(tag)
             _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] removed cached image tag={tag}")
+            _append_line(build_log_path, f"[INFO ] removed cached image tag={tag}")
         except Exception:
             # Image doesn't exist or couldn't be removed, which is fine
             pass
@@ -525,6 +532,7 @@ def local_run_from_lz4(
     except Exception:
         pass
     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] image loaded id={image_id or ''} tag={image_tag or ''}")
+    _append_line(build_log_path, f"[INFO ] image loaded id={image_id or ''} tag={image_tag or ''}")
     _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "image_loaded", "image_id": image_id, "tag": image_tag, "force_reloaded": len(removed_cached_images) > 0})
 
     # Cleanup: delete compressed artifact (.lz4 or .gz) copied from SFTP; keep JSONs and Dockerfile
@@ -534,15 +542,18 @@ def local_run_from_lz4(
             os.remove(dest_lz4)
             removed.append(dest_lz4)
         _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] cleanup completed removed={removed}")
+        _append_line(build_log_path, f"[INFO ] cleanup completed removed={removed}")
         _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cleanup_compressed_files", "removed": removed})
     except Exception as ce:
         _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] cleanup warning {ce}")
+        _append_line(build_log_path, f"[WARN ] cleanup warning {ce}")
         _append_json(build_structured_path, {"ts": _ts(), "level": "warn", "event": "cleanup_warning", "error": str(ce)})
 
     # Stage: running
     if emit:
         emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "starting", "image_id": image_id, "tag": image_tag})
     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] running container")
+    _append_line(build_log_path, f"[INFO ] running container image={image_id or (image_tag or '')} name={container_name} network=traefik-network")
     _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "run_start", "image_id": image_id, "tag": image_tag})
 
     # Map cpu to nano_cpus if provided
@@ -605,11 +616,13 @@ def local_run_from_lz4(
         if emit:
             emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "completed", "container_id": run_res.get("id"), "container_name": run_res.get("name")})
         _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] run completed container_id={run_res.get('id')} container_name={run_res.get('name')}")
+        _append_line(build_log_path, f"[INFO ] run completed container_id={run_res.get('id')} container_name={run_res.get('name')}")
         _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "run_completed", "container": run_res})
     except Exception as e:
         msg = f"run error: {e}"
         _append_line(error_log_path, msg)
         _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+        _append_line(build_log_path, f"[ERROR] {msg}")
         _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "run_error", "error": str(e)})
         if emit:
             emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "error", "error": str(e)})
@@ -626,7 +639,7 @@ def local_run_from_lz4(
         start_ts = time.time()
         end_ts = start_ts + 15
         summary.update({
-            "status": "building",
+            "status": "running",
             "stage": "running",
             "container_id": run_res.get("id"),
             "container_name": run_res.get("name"),
@@ -685,13 +698,16 @@ def local_run_from_lz4(
                 "healthcheck": running,
                 "healthchecksstatus": status_str,
                 "isChecking": False,
-                "status": "successful" if running else "failed",
+                "status": "completed" if running else "error",
             })
             _write_json(summary_path, s)
+            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] healthcheck completed running={running} status={status_str}")
+            _append_line(build_log_path, f"[INFO ] healthcheck completed running={running} status={status_str}")
             _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "healthcheck_completed", "running": running, "status": status_str})
             if emit:
                 emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "healthcheck", "healthcheck": running, "healthchecksstatus": status_str})
         except Exception as e:
+            _append_line(build_log_path, f"[ERROR] healthcheck error: {e}")
             _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "healthcheck_error", "error": str(e)})
             try:
                 with open(summary_path, "r") as f:
@@ -1891,6 +1907,8 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             decode=True,
         )
         step_count = 0
+        build_failed = False
+        build_failure_msg: Optional[str] = None
         for chunk in logs:
             logs_collected.append(chunk)
             # Derive raw text and type
@@ -1934,6 +1952,29 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 entry["step_index"] = current_step.get("step_index")
             if isinstance(chunk, dict):
                 entry["keys"] = list(chunk.keys())
+
+            # Detect unrecoverable build failures and stop immediately
+            try:
+                if (entry_type == "error") or ("returned a non-zero code" in (raw_text or "")):
+                    build_failed = True
+                    build_failure_msg = raw_text
+                    _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "build_failed_detected", "message": raw_text})
+                    if emit:
+                        try:
+                            emit({
+                                "task": "docker_build",
+                                "task_id": task_id,
+                                "stage": "building",
+                                "status": "failed",
+                                "error": raw_text,
+                                "app_id": app_id,
+                            })
+                        except Exception:
+                            pass
+                    # Break out of the streaming loop; we'll raise after closing step
+                    break
+            except Exception:
+                pass
 
             # Parse step starts and associate commands
             m = step_re.match(raw_text)
@@ -2052,6 +2093,32 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             current_step["end"] = time.time()
             current_step["duration_sec"] = round(current_step["end"] - current_step["start"], 3)
             _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "step_end", **{k: v for k, v in current_step.items() if k != "start"}})
+
+        # If build failed, do not proceed to next stages
+        if build_failed:
+            total_dur = round(time.time() - build_started, 3)
+            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] build failed error {build_failure_msg} app_id={app_id or ''}")
+            _append_line(error_log_path, build_failure_msg or "build failed")
+            _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "build_failed", "message": build_failure_msg})
+            # Write failure summary immediately for consumers
+            try:
+                if summary_path:
+                    _write_json(summary_path, {
+                        "status": "failed",
+                        "stage": "building",
+                        "error": build_failure_msg,
+                        "tag": tag,
+                        "dockerfile_used": df_arg or "Dockerfile",
+                        "inline": bool(dockerfile_content),
+                        "duration_sec": total_dur,
+                        "steps_detected": len(steps),
+                        "app_id": app_id,
+                        "build_args": build_args or {},
+                    })
+            except Exception:
+                pass
+            # Raise to exit and prevent export/upload progression
+            raise Exception(build_failure_msg or "Docker build failed")
         # Emit completed event
         if emit:
             try:
@@ -2244,7 +2311,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
         try:
             if task_logs_dir:
                 summary_data = {
-                    "status": "building",
+                    "status": "running",
                     "stage": "uploading",
                     "image_id": image_id,
                     "tag": tag,
@@ -2260,6 +2327,12 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                     summary_data["compressed_image_size_bytes"] = os.path.getsize(compressed_image_path) if os.path.exists(compressed_image_path) else 0
                 if sftp_result:
                     summary_data["sftp_deployment"] = sftp_result
+                    try:
+                        if sftp_result.get("status") == "error":
+                            summary_data["status"] = "error"
+                            summary_data["stage"] = "uploading"
+                    except Exception:
+                        pass
                 _write_json(summary_path, summary_data)
         except Exception:
             pass
@@ -2299,7 +2372,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                     "task": "docker_build",
                     "task_id": task_id,
                     "stage": "building",
-                    "status": "error",
+                    "status": "failed",
                     "error": msg,
                     "app_id": app_id,
                 })
@@ -2309,7 +2382,8 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
         try:
             if summary_path:
                 _write_json(summary_path, {
-                    "status": "error",
+                    "status": "failed",
+                    "stage": "building",
                     "error": msg,
                     "tag": tag,
                     "dockerfile_used": df_arg or "Dockerfile",
