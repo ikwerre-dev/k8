@@ -2170,6 +2170,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
         if sftp_host and sftp_username and task_logs_dir:
             try:
                 _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] starting SFTP transfer to production server")
+                _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP transfer started host={sftp_host} port={sftp_port}")
                 _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "sftp_transfer_start", "sftp_host": sftp_host, "sftp_port": sftp_port})
                 if emit:
                     try:
@@ -2196,6 +2197,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 
                 if sftp_result["status"] == "success":
                     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP transfer completed successfully to {sftp_result['remote_path']}")
+                    _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP transfer completed remote_path={sftp_result['remote_path']} files={sftp_result['files_transferred']} size_bytes={sftp_result['total_size_bytes']}")
                     _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "sftp_transfer_completed", 
                                                        "remote_path": sftp_result["remote_path"], 
                                                        "files_transferred": sftp_result["files_transferred"],
@@ -2214,6 +2216,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                             pass
                 else:
                     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP transfer failed: {sftp_result['error']}")
+                    _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP transfer failed error={sftp_result['error']}")
                     _append_line(error_log_path, f"SFTP transfer error: {sftp_result['error']}")
                     _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "sftp_transfer_error", "error": sftp_result["error"]})
                     if emit:
@@ -2232,6 +2235,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             except Exception as sftp_error:
                 error_msg = f"SFTP transfer exception: {str(sftp_error)}"
                 _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {error_msg}")
+                _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {error_msg}")
                 _append_line(error_log_path, error_msg)
                 _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "sftp_transfer_exception", "error": error_msg})
                 sftp_result = {"status": "error", "error": error_msg}

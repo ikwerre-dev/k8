@@ -15,7 +15,7 @@ docker run -d \
   -v /etc/ssl/certs:/etc/ssl/certs \
   -v /etc/ssl/private:/etc/ssl/private \
   -v /var/lib/nginx:/var/lib/nginx \
-  -v /var/log/nginx:/var/log/nginx \
+  -v /var/log/nginx:/var/log/nginx \ 
   -v /var/run/docker.sock:/var/run/docker.sock \
   --name k8-container \
   k8-app
