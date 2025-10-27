@@ -605,6 +605,14 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
                 inferred = summary_obj.get("status") or summary_obj.get("stage")
                 if not build_info.get("status") or build_info.get("status") == "unknown":
                     build_info["status"] = inferred or "unknown"
+                # Surface stage and SFTP deployment details at top-level for easy consumption
+                try:
+                    build_info["stage"] = summary_obj.get("stage")
+                    sftp_info = summary_obj.get("sftp_deployment")
+                    if sftp_info:
+                        build_info["sftp"] = sftp_info
+                except Exception:
+                    pass
             
             # Load parsed Dockerfile metadata
             parsed_dockerfile_path = os.path.join(builds_dir, "dockerfile.parsed.json")
