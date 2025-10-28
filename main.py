@@ -134,9 +134,10 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
                 pass
         def _append_build(path: str, msg: str, level: str = "info"):
             try:
+                now = time.strftime('%Y-%m-%d %H:%M:%S')
                 prefix = "[ERROR]" if str(level).lower() == "error" else "[INFO ]"
                 with open(path, "a") as f:
-                    f.write(f"{prefix} {msg}\n")
+                    f.write(f"[{now}] {prefix} {msg}\n")
             except Exception:
                 pass
         def _append_json(path: str, obj: dict):
@@ -191,8 +192,8 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
             _write_json(summary_path, summary_obj)
         except Exception:
             pass
-        _append_line(events_log_path, "signing in progress")
-        _append_build(build_log_path, "signing in progress")
+        _append_line(events_log_path, "signing starting")
+        _append_build(build_log_path, "signing starting")
         _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "signing_in_progress"})
 
         _append_line(events_log_path, "signing completed")
@@ -209,6 +210,8 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
         old_remove = None
         if req.old_container:
             try:
+                _append_line(events_log_path, f"stopping old container {req.old_container}")
+                _append_build(build_log_path, f"stopping old container {req.old_container}")
                 old_stop = ds.stop_container(req.old_container)
                 _append_line(events_log_path, f"stopped old container {req.old_container}")
                 _append_build(build_log_path, f"stopped old container {req.old_container}")
@@ -218,6 +221,8 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
                 _append_build(build_log_path, f"stop old container error: {e}", level="error")
                 sign_error = True
             try:
+                _append_line(events_log_path, f"removing old container {req.old_container}")
+                _append_build(build_log_path, f"removing old container {req.old_container}")
                 old_remove = ds.remove_container(req.old_container, force=True)
                 _append_line(events_log_path, f"removed old container {req.old_container}")
                 _append_build(build_log_path, f"removed old container {req.old_container}")
@@ -238,6 +243,8 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
                         old_cid = old_up.get("upstream_host")
                     if old_cid:
                         try:
+                            _append_line(events_log_path, f"stopping old container {old_cid}")
+                            _append_build(build_log_path, f"stopping old container {old_cid}")
                             old_stop = ds.stop_container(old_cid)
                             _append_line(events_log_path, f"stopped old container {old_cid}")
                             _append_build(build_log_path, f"stopped old container {old_cid}")
@@ -247,6 +254,8 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
                             _append_build(build_log_path, f"stop old container error: {e}", level="error")
                             sign_error = True
                         try:
+                            _append_line(events_log_path, f"removing old container {old_cid}")
+                            _append_build(build_log_path, f"removing old container {old_cid}")
                             old_remove = ds.remove_container(old_cid, force=True)
                             _append_line(events_log_path, f"removed old container {old_cid}")
                             _append_build(build_log_path, f"removed old container {old_cid}")
@@ -673,6 +682,10 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
                     sftp_info = summary_obj.get("sftp_deployment")
                     if sftp_info:
                         build_info["sftp"] = sftp_info
+                    # Surface SFTP params (host, port, username) for debugging
+                    sftp_params = summary_obj.get("sftp_params")
+                    if sftp_params:
+                        build_info["sftp_params"] = sftp_params
                 except Exception:
                     pass
             
@@ -1078,13 +1091,22 @@ def build_delete(req: BuildDeleteRequest):
         remote_path = sftp_info.get("remote_path")
         sftp_host = sftp_info.get("sftp_host")
         sftp_port = sftp_info.get("sftp_port") or 22
+        
         if remote_path and sftp_host and req.sftp_username:
             ssh = None
             sftp = None
             try:
                 ssh = paramiko.SSHClient()
                 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                ssh.connect(hostname=sftp_host, port=int(sftp_port), username=req.sftp_username, password=req.sftp_password, timeout=30)
+                _conn_kwargs = {
+                    "hostname": sftp_host,
+                    "port": int(sftp_port),
+                    "username": req.sftp_username,
+                    "timeout": 30,
+                }
+                if req.sftp_password:
+                    _conn_kwargs["password"] = req.sftp_password
+                ssh.connect(**_conn_kwargs)
                 sftp = ssh.open_sftp()
                 def _rmtree(path: str):
                     try:

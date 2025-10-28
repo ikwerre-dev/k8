@@ -378,8 +378,13 @@ def local_run_from_lz4(
         if not path:
             return
         try:
+            msg = line.rstrip("\n")
+            # Prepend timestamp if missing
+            if not re.match(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]", msg):
+                now = time.strftime('%Y-%m-%d %H:%M:%S')
+                msg = f"[{now}] {msg}"
             with open(path, "a") as f:
-                f.write(line.rstrip("\n") + "\n")
+                f.write(msg + "\n")
         except Exception:
             pass
 
@@ -387,6 +392,8 @@ def local_run_from_lz4(
         if not path:
             return
         try:
+            # Ensure timestamp exists in structured logs
+            obj.setdefault("ts", _ts())
             with open(path, "a") as f:
                 f.write(json.dumps(obj) + "\n")
         except Exception:
@@ -551,7 +558,7 @@ def local_run_from_lz4(
 
     # Stage: running
     if emit:
-        emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "starting", "image_id": image_id, "tag": image_tag})
+        emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "starting", "image_id": image_id, "tag": image_tag, "ts": _ts()})
     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] running container")
     _append_line(build_log_path, f"[INFO ] running container image={image_id or (image_tag or '')} name={container_name} network=traefik-network")
     _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "run_start", "image_id": image_id, "tag": image_tag})
@@ -614,7 +621,7 @@ def local_run_from_lz4(
             labels=labels,
         )
         if emit:
-            emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "completed", "container_id": run_res.get("id"), "container_name": run_res.get("name")})
+            emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "completed", "container_id": run_res.get("id"), "container_name": run_res.get("name"), "ts": _ts()})
         _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] run completed container_id={run_res.get('id')} container_name={run_res.get('name')}")
         _append_line(build_log_path, f"[INFO ] run completed container_id={run_res.get('id')} container_name={run_res.get('name')}")
         _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "run_completed", "container": run_res})
@@ -625,7 +632,7 @@ def local_run_from_lz4(
         _append_line(build_log_path, f"[ERROR] {msg}")
         _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "run_error", "error": str(e)})
         if emit:
-            emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "error", "error": str(e)})
+            emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "error", "error": str(e), "ts": _ts()})
         raise
 
     # Update summary but keep status as 'building'
@@ -1613,6 +1620,9 @@ def transfer_build_to_sftp(build_dir: str, task_id: str, sftp_host: str, sftp_us
     """
     Transfer the entire build directory to SFTP server at /pxxl/upload/applications/{task_id}
     """
+    def _ts() -> str:
+        return time.strftime('%Y-%m-%dT%H:%M:%S')
+    
     def _emit_log(message: str, level: str = "info"):
         if emit:
             emit({
@@ -1623,6 +1633,7 @@ def transfer_build_to_sftp(build_dir: str, task_id: str, sftp_host: str, sftp_us
                 "message": message,
                 "level": level,
                 "app_id": app_id,
+                "ts": _ts(),
             })
     
     try:
@@ -1634,17 +1645,24 @@ def transfer_build_to_sftp(build_dir: str, task_id: str, sftp_host: str, sftp_us
         
         # Connect to SFTP server
         _emit_log(f"Connecting to SFTP server {sftp_host}:{sftp_port}")
-        ssh.connect(
-            hostname=sftp_host,
-            port=sftp_port,
-            username=sftp_username,
-            password=sftp_password,
-            timeout=30
-        )  
+        _conn_kwargs = {
+            "hostname": sftp_host,
+            "port": int(sftp_port or 22),
+            "username": sftp_username,
+            "timeout": 30,
+        }
+        if sftp_password:
+            _conn_kwargs["password"] = sftp_password
+        else:
+            _emit_log("SFTP using key/agent/no-password auth")
+        ssh.connect(**_conn_kwargs)
+        
+        _emit_log("SFTP SSH connection established")
         
         
         # Create SFTP client
         sftp = ssh.open_sftp()
+        _emit_log("SFTP client opened")
         
         # Create remote directory path
         
@@ -1673,7 +1691,22 @@ def transfer_build_to_sftp(build_dir: str, task_id: str, sftp_host: str, sftp_us
         ensure_remote_dirs(remote_dir)
         
         # Transfer all files and directories recursively.     
+        # Pre-count files to upload for visibility
+        planned_file_count = 0
+        planned_total_size = 0
+        try:
+            for root, dirs, files in os.walk(build_dir):
+                for file in files:
+                    planned_file_count += 1
+                    fp = os.path.join(root, file)
+                    try:
+                        planned_total_size += os.path.getsize(fp)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         _emit_log(f"Transferring build directory from {build_dir} to {remote_dir}")
+        _emit_log(f"Upload starting: {planned_file_count} files, {planned_total_size} bytes")
         
         def upload_recursive(local_path: str, remote_path: str):
             for item in os.listdir(local_path):
@@ -1715,6 +1748,7 @@ def transfer_build_to_sftp(build_dir: str, task_id: str, sftp_host: str, sftp_us
                 file_count += 1
         
         _emit_log(f"Transfer completed successfully. Files: {file_count}, Total size: {total_size} bytes")
+        _emit_log("Closing SFTP connection")
         
         # Close connections
         sftp.close()
@@ -1778,8 +1812,12 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
         if not path:
             return
         try:
+            msg = line.rstrip("\n")
+            if not re.match(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]", msg):
+                now = time.strftime('%Y-%m-%d %H:%M:%S')
+                msg = f"[{now}] {msg}"
             with open(path, "a") as f:
-                f.write(line.rstrip("\n") + "\n")
+                f.write(msg + "\n")
         except Exception:
             pass
 
@@ -1787,6 +1825,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
         if not path:
             return
         try:
+            obj.setdefault("ts", _ts())
             with open(path, "a") as f:
                 f.write(json.dumps(obj) + "\n")
         except Exception:
@@ -1883,6 +1922,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                     "inline": bool(dockerfile_content),
                     "app_id": app_id,
                     "build_args": build_args or {},
+                    "ts": _ts(),
                 })
             except Exception:
                 pass
@@ -2090,6 +2130,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                         "status": "stream",
                         "chunk": chunk,
                         "app_id": app_id,
+                        "ts": _ts(),
                     })
                 except Exception:
                     pass
@@ -2136,6 +2177,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                     "image_id": image_id,
                     "tag": tag,
                     "app_id": app_id,
+                    "ts": _ts(),
                 })
             except Exception:
                 pass
@@ -2235,6 +2277,14 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 if compressed_image_path:
                     summary_data["compressed_image_path"] = compressed_image_path
                     summary_data["compressed_image_size_bytes"] = os.path.getsize(compressed_image_path) if os.path.exists(compressed_image_path) else 0
+                # Persist SFTP parameters (mask password) so runtime can surface them in buildinfo
+                if sftp_host and sftp_username:
+                    summary_data["sftp_params"] = {
+                        "host": sftp_host,
+                        "port": sftp_port or 22,
+                        "username": sftp_username,
+                        "used_password": bool(sftp_password),
+                    }
                 _write_json(summary_path, summary_data)
         except Exception:
             pass
@@ -2244,7 +2294,11 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             try:
                 _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] starting SFTP transfer to production server")
                 _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP transfer started host={sftp_host} port={sftp_port}")
-                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "sftp_transfer_start", "sftp_host": sftp_host, "sftp_port": sftp_port})
+                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "sftp_transfer_start", "sftp_host": sftp_host, "sftp_port": sftp_port, "sftp_username": sftp_username})
+                # Log auth method used for SFTP (password vs key/agent)
+                auth_method = "password" if sftp_password else "key_or_agent"
+                _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP auth method: {auth_method}")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "sftp_auth_method", "method": auth_method})
                 if emit:
                     try:
                         emit({
@@ -2253,6 +2307,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                             "stage": "uploading",
                             "status": "starting",
                             "app_id": app_id,
+                            "ts": _ts(),
                         })
                     except Exception:
                         pass
@@ -2267,6 +2322,8 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                     emit=emit,
                     app_id=app_id
                 ) 
+                
+                # remove accidental debug prints
                 
                 if sftp_result["status"] == "success":
                     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP transfer completed successfully to {sftp_result['remote_path']}")
@@ -2284,6 +2341,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                                 "status": "completed",
                                 "remote_path": sftp_result.get("remote_path"),
                                 "app_id": app_id,
+                                "ts": _ts(),
                             })
                         except Exception:
                             pass
@@ -2301,6 +2359,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                                 "status": "error",
                                 "error": sftp_result.get("error"),
                                 "app_id": app_id,
+                                "ts": _ts(),
                             })
                         except Exception:
                             pass
@@ -2331,6 +2390,13 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 if compressed_image_path:
                     summary_data["compressed_image_path"] = compressed_image_path
                     summary_data["compressed_image_size_bytes"] = os.path.getsize(compressed_image_path) if os.path.exists(compressed_image_path) else 0
+                if sftp_host and sftp_username:
+                    summary_data["sftp_params"] = {
+                        "host": sftp_host,
+                        "port": sftp_port or 22,
+                        "username": sftp_username,
+                        "used_password": bool(sftp_password),
+                    }
                 if sftp_result:
                     summary_data["sftp_deployment"] = sftp_result
                     try:
@@ -2349,6 +2415,18 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             "dockerfile_used": df_arg or "Dockerfile",
             "inline": bool(dockerfile_content),
             "logs": logs_collected[-10:],
+            # Surface SFTP outcome (success/error) and params in the response for debugging
+            "sftp_deployment": sftp_result,
+            "sftp_params": (
+                {
+                    "host": sftp_host,
+                    "port": sftp_port or 22,
+                    "username": sftp_username,
+                    "used_password": bool(sftp_password),
+                }
+                if (sftp_host and sftp_username)
+                else None
+            ),
         }
     except Exception as e:
         # Append error logs
@@ -2381,6 +2459,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                     "status": "failed",
                     "error": msg,
                     "app_id": app_id,
+                    "ts": _ts(),
                 })
             except Exception:
                 pass
