@@ -384,7 +384,7 @@ class BuildStartRequest(BaseModel):
     dockerfile_name: Optional[str] = None
     build_args: Optional[Dict[str, str]] = None
     cleanup: Optional[bool] = True
-    nocache: Optional[bool] = False
+    nocache: Optional[bool] = True
     tag: Optional[str] = None
     app_id: Optional[str] = None
     # SFTP deployment parameters
@@ -447,7 +447,7 @@ class BuildStreamRequest(BaseModel):
     dockerfile_content: Optional[str] = None
     dockerfile_name: Optional[str] = None
     cleanup: Optional[bool] = True
-    nocache: Optional[bool] = False
+    nocache: Optional[bool] = True
 
 class TaskRunStreamRequest(BaseModel):
     cmd: str

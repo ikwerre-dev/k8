@@ -1773,7 +1773,7 @@ def transfer_build_to_sftp(build_dir: str, task_id: str, sftp_host: str, sftp_us
             "sftp_port": sftp_port
         }
 
-def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile: Optional[str] = None, build_args: Optional[Dict[str, str]] = None, task_id: Optional[str] = None, override_log_endpoint: Optional[str] = None, dockerfile_content: Optional[str] = None, dockerfile_name: Optional[str] = None, cleanup: Optional[bool] = True, nocache: Optional[bool] = False, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None, sftp_host: Optional[str] = None, sftp_username: Optional[str] = None, sftp_password: Optional[str] = None, sftp_port: Optional[int] = 22) -> dict:
+def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile: Optional[str] = None, build_args: Optional[Dict[str, str]] = None, task_id: Optional[str] = None, override_log_endpoint: Optional[str] = None, dockerfile_content: Optional[str] = None, dockerfile_name: Optional[str] = None, cleanup: Optional[bool] = True, nocache: Optional[bool] = True, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None, sftp_host: Optional[str] = None, sftp_username: Optional[str] = None, sftp_password: Optional[str] = None, sftp_port: Optional[int] = 22) -> dict:
     client = get_client()
     endpoint = override_log_endpoint or get_log_endpoint()
     headers = get_auth_header()
