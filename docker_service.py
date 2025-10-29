@@ -610,7 +610,7 @@ def local_run_from_lz4(
             image=image_id or (image_tag or ''),
             name=container_name,
             command=command,
-            ports=None,
+            ports=ports,
             env=env,
             volumes=volumes_arg,
             mem_limit=memory,
@@ -635,6 +635,42 @@ def local_run_from_lz4(
             emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "error", "error": str(e), "ts": _ts()})
         raise
 
+    # Immediately inspect container state and ports
+    details = {}
+    state = {}
+    running_now = False
+    inspected_host_port: Optional[int] = None
+    try:
+        cid = run_res.get("id")
+        if cid:
+            # Give a brief moment for container to transition
+            time.sleep(0.5)
+            details = client.api.inspect_container(cid) or {}
+            state = details.get("State") or {}
+            running_now = bool(state.get("Running"))
+            # Inspect port bindings for first internal port key
+            try:
+                ports_map = ((details.get("NetworkSettings") or {}).get("Ports") or {})
+                bindings = ports_map.get(internal_port_key) or []
+                if bindings:
+                    inspected_host_port = int(bindings[0].get("HostPort")) if bindings[0].get("HostPort") else None
+            except Exception:
+                inspected_host_port = None
+            # If container exited quickly, try to capture last logs for debugging
+            if not running_now:
+                try:
+                    c_obj = client.containers.get(cid)
+                    logs_tail = c_obj.logs(tail=50)
+                    logs_text = logs_tail.decode("utf-8", errors="ignore") if isinstance(logs_tail, (bytes, bytearray)) else str(logs_tail)
+                    _append_line(build_log_path, f"[WARN ] container not running; recent logs:\n{logs_text}")
+                    _append_json(build_structured_path, {"ts": _ts(), "level": "warn", "event": "container_logs_tail", "lines": logs_text.splitlines()[-50:]})
+                except Exception:
+                    pass
+    except Exception:
+        details = {}
+        state = {}
+        running_now = False
+
     # Update summary but keep status as 'building'
     try:
         if os.path.exists(summary_path):
@@ -650,7 +686,7 @@ def local_run_from_lz4(
             "stage": "running",
             "container_id": run_res.get("id"),
             "container_name": run_res.get("name"),
-            "host_port": None,
+            "host_port": inspected_host_port,
             "healthcheck": False,
             "healthchecksstatus": "pending",
             "isChecking": True,
@@ -677,6 +713,11 @@ def local_run_from_lz4(
                 "internal_port_key": internal_port_key,
                 "network": "traefik-network",
                 "labels": labels,
+                "inspect": {
+                    "running": running_now,
+                    "state": state,
+                    "host_port": inspected_host_port,
+                }
             }
         })
         _write_json(summary_path, summary)
