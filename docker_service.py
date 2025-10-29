@@ -356,7 +356,7 @@ def local_run_from_lz4(
     base_logs_dir = os.path.abspath(os.path.join("/app/upload"))
     task_logs_dir = os.path.join(base_logs_dir, task_id)
     os.makedirs(task_logs_dir, exist_ok=True)
-    build_log_path = os.path.join(task_logs_dir, "build.log")
+    build_log_path = os.path.join(task_logs_dir, "build.log") 
     build_structured_path = os.path.join(task_logs_dir, "build.jsonl")
     events_log_path = os.path.join(task_logs_dir, "events.log")
     error_log_path = os.path.join(task_logs_dir, "error.log")
@@ -571,6 +571,7 @@ def local_run_from_lz4(
     if command:
         try:
             _append_line(build_log_path, f"[INFO ] run command: {command}")
+            _append_line(events_log_path, f"pxxl run command: {command}")
             _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "run_command", "command": command})
         except Exception:
             pass
@@ -671,6 +672,7 @@ def local_run_from_lz4(
                 logs_text = logs_tail.decode("utf-8", errors="ignore") if isinstance(logs_tail, (bytes, bytearray)) else str(logs_tail)
                 if logs_text:
                     _append_line(build_log_path, f"[INFO ] container initial logs:\n{logs_text}")
+                    _append_line(events_log_path, f"pxxl run: container initial logs:\n{logs_text}")
                     _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "container_logs_initial", "lines": logs_text.splitlines()[-200:]})
                     try:
                         with open(container_logs_path, "a") as f:
