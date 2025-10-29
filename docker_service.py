@@ -1618,7 +1618,7 @@ def blue_green_deploy(base_id_or_name: str, image_repo: str, tag: str, wait_seco
 
 def transfer_build_to_sftp(build_dir: str, task_id: str, sftp_host: str, sftp_username: str, sftp_password: Optional[str] = None, sftp_port: int = 22, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None) -> Dict[str, Any]:
     """
-    Transfer the entire build directory to SFTP server at /pxxl/upload/applications/{task_id}
+    Deprecated: SFTP transfer retained for backward compatibility. Use HTTP upload.
     """
     def _ts() -> str:
         return time.strftime('%Y-%m-%dT%H:%M:%S')
@@ -1759,8 +1759,6 @@ def transfer_build_to_sftp(build_dir: str, task_id: str, sftp_host: str, sftp_us
             "remote_path": remote_dir,
             "files_transferred": file_count,
             "total_size_bytes": total_size,
-            "sftp_host": sftp_host,
-            "sftp_port": sftp_port
         }
         
     except Exception as e:
@@ -1769,11 +1767,132 @@ def transfer_build_to_sftp(build_dir: str, task_id: str, sftp_host: str, sftp_us
         return {
             "status": "error",
             "error": error_msg,
-            "sftp_host": sftp_host,
-            "sftp_port": sftp_port
         }
 
-def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile: Optional[str] = None, build_args: Optional[Dict[str, str]] = None, task_id: Optional[str] = None, override_log_endpoint: Optional[str] = None, dockerfile_content: Optional[str] = None, dockerfile_name: Optional[str] = None, cleanup: Optional[bool] = True, nocache: Optional[bool] = True, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None, sftp_host: Optional[str] = None, sftp_username: Optional[str] = None, sftp_password: Optional[str] = None, sftp_port: Optional[int] = 22) -> dict:
+def transfer_build_to_http(build_dir: str, task_id: str, upload_url: str, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Compress the folder contents to a tar.lz4 and POST to {upload_url}/upload
+    with multipart form fields: foldername=task_id, file=@<tar.lz4>.
+    """
+    def _ts() -> str:
+        return time.strftime('%Y-%m-%dT%H:%M:%S')
+
+    def _emit_log(message: str, level: str = "info"):
+        if emit:
+            emit({
+                "task": "http_upload",
+                "task_id": task_id,
+                "stage": "uploading",
+                "status": "progress",
+                "message": message,
+                "level": level,
+                "app_id": app_id,
+                "ts": _ts(),
+            })
+
+    try:
+        import tarfile
+        import tempfile
+        import requests
+        import shutil
+
+        _emit_log("Starting HTTP upload to upload server")
+
+        # Create tar of folder contents (exclude the root folder name)
+        tmp_dir = tempfile.mkdtemp(prefix=f"pxxl-{task_id}-")
+        tar_path = os.path.join(tmp_dir, f"{task_id}.tar")
+        with tarfile.open(tar_path, mode="w") as tf:
+            for item in os.listdir(build_dir):
+                full_path = os.path.join(build_dir, item)
+                # Add each top-level item under its own name
+                tf.add(full_path, arcname=item)
+
+        # Compress to .tar.lz4
+        lz4_path = f"{tar_path}.lz4"
+        try:
+            result = subprocess.run(["lz4", "-z", "-f", tar_path, lz4_path], capture_output=True, text=True, timeout=300)
+            if result.returncode != 0:
+                raise Exception(result.stderr or "lz4 compression failed")
+        except Exception as lz4_error:
+            # Fallback to gzip if lz4 is unavailable
+            import gzip
+            lz4_path = f"{tar_path}.gz"
+            with open(tar_path, "rb") as f_in:
+                with gzip.open(lz4_path, "wb") as f_out:
+                    f_out.writelines(f_in)
+            _emit_log(f"lz4 unavailable/failed, used gzip: {lz4_error}")
+
+        # Move final archive into build_dir with a stable name
+        target_name = "upload.tar.lz4" if lz4_path.endswith(".lz4") else "upload.tar.gz"
+        target_archive_path = os.path.join(build_dir, target_name)
+        try:
+            # Ensure we don't overwrite an existing file silently
+            if os.path.exists(target_archive_path):
+                try:
+                    os.remove(target_archive_path)
+                except Exception:
+                    pass
+            shutil.move(lz4_path, target_archive_path)
+        except Exception:
+            # If move fails, fallback to using the temp path
+            target_archive_path = lz4_path
+
+        size_bytes = os.path.getsize(target_archive_path)
+
+        # Normalize upload endpoint
+        final_url = (upload_url or "").rstrip("/") + "/upload"
+
+        # Prepare replicable curl command for visibility
+        curl_cmd = (
+            f"curl -X POST {final_url} "
+            f"-F \"foldername={task_id}\" "
+            f"-F \"file=@{target_archive_path}\""
+        )
+
+        _emit_log(f"pxxl transfer: upload url: {final_url}")
+        _emit_log(f"pxxl transfer: curl: {curl_cmd}")
+        # Also print to console for IDE visibility
+        print(f"pxxl transfer: upload url {final_url}")
+        print(f"pxxl transfer: curl {curl_cmd}")
+        _emit_log(f"Uploading archive ({size_bytes} bytes) to {final_url}")
+
+        with open(target_archive_path, "rb") as f:
+            files = {"file": (os.path.basename(lz4_path), f)}
+            data = {"foldername": task_id}
+            resp = requests.post(final_url, files=files, data=data, timeout=60)
+
+        try:
+            payload = resp.json()
+        except Exception:
+            payload = {"status": "error", "error": f"Non-JSON response: {resp.text[:200]}"}
+
+        if resp.status_code == 200 and str(payload.get("status")).lower() == "success":
+            _emit_log("HTTP upload completed successfully")
+            return {
+                "status": "success",
+                "foldername": payload.get("folder") or task_id,
+                "files_transferred": 1,
+                "total_size_bytes": size_bytes,
+                "final_url": final_url,
+                "archive_path": target_archive_path,
+                "curl": curl_cmd,
+            }
+        else:
+            err = payload.get("error") or f"HTTP {resp.status_code}"
+            _emit_log(f"HTTP upload failed: {err}", level="error")
+            return {
+                "status": "error",
+                "error": err,
+                "final_url": final_url,
+                "archive_path": target_archive_path,
+                "curl": curl_cmd,
+            }
+    except Exception as e:
+        msg = f"HTTP upload encountered an exception: {str(e)}"
+        _emit_log(msg, level="error")
+        return {"status": "error", "error": msg}
+
+def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile: Optional[str] = None, build_args: Optional[Dict[str, str]] = None, task_id: Optional[str] = None, override_log_endpoint: Optional[str] = None, dockerfile_content: Optional[str] = None, dockerfile_name: Optional[str] = None, cleanup: Optional[bool] = True, nocache: Optional[bool] = True, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None, upload_url: Optional[str] = None) -> dict:
     client = get_client()
     endpoint = override_log_endpoint or get_log_endpoint()
     headers = get_auth_header()
@@ -2277,20 +2396,12 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 if compressed_image_path:
                     summary_data["compressed_image_path"] = compressed_image_path
                     summary_data["compressed_image_size_bytes"] = os.path.getsize(compressed_image_path) if os.path.exists(compressed_image_path) else 0
-                # Persist SFTP parameters (mask password) so runtime can surface them in buildinfo
-                if sftp_host and sftp_username:
-                    summary_data["sftp_params"] = {
-                        "host": sftp_host,
-                        "port": sftp_port or 22,
-                        "username": sftp_username,
-                        "used_password": bool(sftp_password),
-                    }
                 _write_json(summary_path, summary_data)
         except Exception:
             pass
 
-        sftp_result = None
-        if sftp_host and sftp_username and task_logs_dir:
+        upload_result = None
+        if upload_url and task_logs_dir:
             try:
                 _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer started")
                 _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer started")
@@ -2307,24 +2418,34 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                         })
                     except Exception:
                         pass
-                
-                sftp_result = transfer_build_to_sftp(
+
+                upload_result = transfer_build_to_http(
                     build_dir=task_logs_dir,
                     task_id=task_id,
-                    sftp_host=sftp_host,
-                    sftp_username=sftp_username,
-                    sftp_password=sftp_password,
-                    sftp_port=sftp_port or 22,
+                    upload_url=upload_url,
                     emit=emit,
                     app_id=app_id
                 ) 
                 
                 # remove accidental debug prints
                 
-                if sftp_result["status"] == "success":
+                # Log upload url and curl used for the transfer
+                try:
+                    if upload_result and upload_result.get("final_url"):
+                        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: upload url {upload_result.get('final_url')}")
+                        _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: upload url {upload_result.get('final_url')}")
+                        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "transfer_details", "stage": "uploading", "status": "progress", "upload_url": upload_result.get("final_url"), "archive_path": upload_result.get("archive_path")})
+                    if upload_result and upload_result.get("curl"):
+                        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: curl {upload_result.get('curl')}")
+                        _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: curl {upload_result.get('curl')}")
+                        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "transfer_curl", "stage": "uploading", "status": "progress", "curl": upload_result.get("curl")})
+                except Exception:
+                    pass
+
+                if upload_result["status"] == "success":
                     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer completed successfully")
-                    _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer completed successfully files={sftp_result['files_transferred']} size_bytes={sftp_result['total_size_bytes']}")
-                    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "transfer_completed", "stage": "uploading", "status": "completed", "files_transferred": sftp_result["files_transferred"], "total_size_bytes": sftp_result["total_size_bytes"], "command": "pxxl launch transfer"})
+                    _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer completed successfully files={upload_result['files_transferred']} size_bytes={upload_result['total_size_bytes']}")
+                    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "transfer_completed", "stage": "uploading", "status": "completed", "files_transferred": upload_result["files_transferred"], "total_size_bytes": upload_result["total_size_bytes"], "command": "pxxl launch transfer"})
                     if emit:
                         try:
                             emit({
@@ -2332,7 +2453,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                                 "task_id": task_id,
                                 "stage": "uploading",
                                 "status": "completed",
-                                "remote_path": sftp_result.get("remote_path"),
+                                "remote_path": upload_result.get("remote_path"),
                                 "app_id": app_id,
                                 "ts": _ts(),
                             })
@@ -2350,19 +2471,19 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                                 "task_id": task_id,
                                 "stage": "uploading",
                                 "status": "error",
-                                "error": sftp_result.get("error"),
+                                "error": upload_result.get("error"),
                                 "app_id": app_id,
                                 "ts": _ts(),
                             })
                         except Exception:
                             pass
-                    
-            except Exception as sftp_error:
+                
+            except Exception as upload_error:
                 _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer encountered an exception")
                 _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer encountered an exception")
                 _append_line(error_log_path, "pxxl transfer: exception during artifact transfer")
                 _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "transfer_exception", "stage": "uploading", "status": "error", "command": "pxxl launch transfer"})
-                sftp_result = {"status": "error", "error": error_msg}
+                upload_result = {"status": "error", "error": str(upload_error)}
 
         # Write a summary JSON for convenience
         try:
@@ -2382,11 +2503,11 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 if compressed_image_path:
                     summary_data["compressed_image_path"] = compressed_image_path
                     summary_data["compressed_image_size_bytes"] = os.path.getsize(compressed_image_path) if os.path.exists(compressed_image_path) else 0
-                # Do not include sensitive SFTP connection parameters in summary
-                if sftp_result:
-                    summary_data["sftp_deployment"] = sftp_result
+                # Include HTTP upload outcome in summary under legacy key for compatibility
+                if upload_result:
+                    summary_data["sftp_deployment"] = upload_result
                     try:
-                        if sftp_result.get("status") == "error":
+                        if upload_result.get("status") == "error":
                             summary_data["status"] = "error"
                             summary_data["stage"] = "uploading"
                     except Exception:
@@ -2401,8 +2522,8 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             "dockerfile_used": df_arg or "Dockerfile",
             "inline": bool(dockerfile_content),
             "logs": logs_collected[-10:],
-            # Surface SFTP outcome (success/error) and params in the response for debugging
-            "sftp_deployment": sftp_result,
+            # Surface upload outcome (success/error) in the response for debugging
+            "sftp_deployment": upload_result,
         }
     except Exception as e:
         # Append error logs
