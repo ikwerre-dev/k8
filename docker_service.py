@@ -559,6 +559,11 @@ def local_run_from_lz4(
     # Stage: running
     if emit:
         emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "starting", "image_id": image_id, "tag": image_tag, "ts": _ts()})
+    # Initialize container_name before any logging to avoid UnboundLocalError
+    try:
+        container_name = f"{app_id}-{task_id}" if app_id else (name or None)
+    except Exception:
+        container_name = name or None
     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl run: starting container")
     _append_line(build_log_path, f"[INFO ] pxxl run: starting container image={(image_id or (image_tag or ''))} name={container_name} network=traefik-network")
     _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "run_start", "stage": "running", "status": "starting", "command": "pxxl launch run"})
@@ -571,11 +576,7 @@ def local_run_from_lz4(
         except Exception:
             nano_cpus = None
 
-    # Generate container name using app_id and task_id if app_id is provided
-    if app_id:
-        container_name = f"{app_id}-{task_id}"
-    else:
-        container_name = name
+    # container_name already initialized above for logging
     # Determine internal port key from requested ports; default to 80/tcp
     internal_port_key = None
     if ports and isinstance(ports, dict) and ports:
