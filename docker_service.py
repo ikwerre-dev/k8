@@ -434,9 +434,9 @@ def local_run_from_lz4(
     compressionapthname = f"{task_id}+{basename_for_ops}"
 
     # Stage: decompiling
-    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling {basename_for_ops}")
-    _append_line(build_log_path, f"[INFO ] decompiling {basename_for_ops}")
-    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_start", "lz4_path": lz4_for_decomp, "compressionapthname": compressionapthname})
+    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl decompile: {basename_for_ops}")
+    _append_line(build_log_path, f"[INFO ] pxxl decompile: {basename_for_ops}")
+    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_start", "stage": "decompiling", "status": "starting", "lz4_path": lz4_for_decomp, "compressionapthname": compressionapthname, "command": "pxxl launch decompile"})
     if emit:
         emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "starting", "lz4": lz4_for_decomp, "compressionapthname": compressionapthname})
 
@@ -450,9 +450,9 @@ def local_run_from_lz4(
                 res = subprocess.run(["gzip", "-d", "-c", lz4_for_decomp], stdout=out, stderr=subprocess.PIPE, text=False, timeout=300)
             if res.returncode != 0:
                 raise RuntimeError(f"gzip decompression failed: {res.stderr.decode('utf-8', errors='ignore')}")
-            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling completed output={tar_path}")
-            _append_line(build_log_path, f"[INFO ] decompiling completed output={tar_path}")
-            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_completed", "tar_path": tar_path})
+            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl decompile: completed")
+            _append_line(build_log_path, f"[INFO ] pxxl decompile: completed")
+            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_completed", "stage": "decompiling", "status": "completed", "tar_path": tar_path, "command": "pxxl launch decompile"})
             if emit:
                 emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "completed", "output": tar_path})
         except Exception as e:
@@ -460,7 +460,7 @@ def local_run_from_lz4(
             _append_line(error_log_path, msg)
             _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
             _append_line(build_log_path, f"[ERROR] {msg}")
-            _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "decompiling_error", "error": str(e)})
+            _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "decompiling_error", "stage": "decompiling", "status": "error", "error": str(e), "command": "pxxl launch decompile"})
             if emit:
                 emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "error", "error": str(e)})
             raise
@@ -473,9 +473,9 @@ def local_run_from_lz4(
             res = subprocess.run(["lz4", "-d", "-f", lz4_for_decomp, tar_path], capture_output=True, text=True, timeout=300)
             if res.returncode != 0:
                 raise RuntimeError(f"lz4 decompression failed: {res.stderr}")
-            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] decompiling completed output={tar_path}")
-            _append_line(build_log_path, f"[INFO ] decompiling completed output={tar_path}")
-            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_completed", "tar_path": tar_path})
+            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl decompile: completed")
+            _append_line(build_log_path, f"[INFO ] pxxl decompile: completed")
+            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "decompiling_completed", "stage": "decompiling", "status": "completed", "tar_path": tar_path, "command": "pxxl launch decompile"})
             if emit:
                 emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "completed", "output": tar_path})
         except Exception as e:
@@ -483,7 +483,7 @@ def local_run_from_lz4(
             _append_line(error_log_path, msg)
             _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
             _append_line(build_log_path, f"[ERROR] {msg}")
-            _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "decompiling_error", "error": str(e)})
+            _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "decompiling_error", "stage": "decompiling", "status": "error", "error": str(e), "command": "pxxl launch decompile"})
             if emit:
                 emit({"task": "docker_localrun", "task_id": task_id, "stage": "decompiling", "status": "error", "error": str(e)})
             raise
@@ -559,9 +559,9 @@ def local_run_from_lz4(
     # Stage: running
     if emit:
         emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "starting", "image_id": image_id, "tag": image_tag, "ts": _ts()})
-    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] running container")
-    _append_line(build_log_path, f"[INFO ] running container image={image_id or (image_tag or '')} name={container_name} network=traefik-network")
-    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "run_start", "image_id": image_id, "tag": image_tag})
+    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl run: starting container")
+    _append_line(build_log_path, f"[INFO ] pxxl run: starting container image={(image_id or (image_tag or ''))} name={container_name} network=traefik-network")
+    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "run_start", "stage": "running", "status": "starting", "command": "pxxl launch run"})
 
     # Map cpu to nano_cpus if provided
     nano_cpus = None
@@ -622,9 +622,9 @@ def local_run_from_lz4(
         )
         if emit:
             emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "completed", "container_id": run_res.get("id"), "container_name": run_res.get("name"), "ts": _ts()})
-        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] run completed container_id={run_res.get('id')} container_name={run_res.get('name')}")
-        _append_line(build_log_path, f"[INFO ] run completed container_id={run_res.get('id')} container_name={run_res.get('name')}")
-        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "run_completed", "container": run_res})
+        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl run: completed")
+        _append_line(build_log_path, f"[INFO ] pxxl run: completed")
+        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "run_completed", "stage": "running", "status": "completed", "command": "pxxl launch run"})
     except Exception as e:
         msg = f"run error: {e}"
         _append_line(error_log_path, msg)
@@ -708,14 +708,14 @@ def local_run_from_lz4(
                 "status": "completed" if running else "error",
             })
             _write_json(summary_path, s)
-            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] healthcheck completed running={running} status={status_str}")
-            _append_line(build_log_path, f"[INFO ] healthcheck completed running={running} status={status_str}")
-            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "healthcheck_completed", "running": running, "status": status_str})
+            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl healthcheck: completed running={running} status={status_str}")
+            _append_line(build_log_path, f"[INFO ] pxxl healthcheck: completed running={running} status={status_str}")
+            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "healthcheck_completed", "stage": "running", "status": "healthcheck", "running": running, "healthchecksstatus": status_str, "command": "pxxl launch healthcheck"})
             if emit:
                 emit({"task": "docker_localrun", "task_id": task_id, "stage": "running", "status": "healthcheck", "healthcheck": running, "healthchecksstatus": status_str})
         except Exception as e:
-            _append_line(build_log_path, f"[ERROR] healthcheck error: {e}")
-            _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "healthcheck_error", "error": str(e)})
+            _append_line(build_log_path, f"[ERROR] pxxl healthcheck: error {e}")
+            _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "healthcheck_error", "stage": "running", "status": "error", "error": str(e), "command": "pxxl launch healthcheck"})
             try:
                 with open(summary_path, "r") as f:
                     s = json.load(f)
@@ -2182,9 +2182,9 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             except Exception:
                 pass
         total_dur = round(time.time() - build_started, 3)
-        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] build completed image_id={image_id or ''} duration={total_dur}s app_id={app_id or ''}")
-        _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] build completed image_id={image_id or ''} duration={total_dur}s app_id={app_id or ''}")
-        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "build_completed", "image_id": image_id, "tag": tag, "duration_sec": total_dur, "app_id": app_id})
+        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl build: project image built successfully duration={total_dur}s")
+        _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl build: project image built successfully duration={total_dur}s")
+        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "build_completed", "stage": "building", "status": "completed", "duration_sec": total_dur, "command": "pxxl launch build"})
         # Export and compress the built image
         compressed_image_path = None
         if task_logs_dir and image_id:
@@ -2292,13 +2292,9 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
         sftp_result = None
         if sftp_host and sftp_username and task_logs_dir:
             try:
-                _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] starting SFTP transfer to production server")
-                _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP transfer started host={sftp_host} port={sftp_port}")
-                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "sftp_transfer_start", "sftp_host": sftp_host, "sftp_port": sftp_port, "sftp_username": sftp_username})
-                # Log auth method used for SFTP (password vs key/agent)
-                auth_method = "password" if sftp_password else "key_or_agent"
-                _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP auth method: {auth_method}")
-                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "sftp_auth_method", "method": auth_method})
+                _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer started")
+                _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer started")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "transfer_started", "stage": "uploading", "status": "starting", "command": "pxxl launch transfer"})
                 if emit:
                     try:
                         emit({
@@ -2326,12 +2322,9 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 # remove accidental debug prints
                 
                 if sftp_result["status"] == "success":
-                    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP transfer completed successfully to {sftp_result['remote_path']}")
-                    _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP transfer completed remote_path={sftp_result['remote_path']} files={sftp_result['files_transferred']} size_bytes={sftp_result['total_size_bytes']}")
-                    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "sftp_transfer_completed", 
-                                                       "remote_path": sftp_result["remote_path"], 
-                                                       "files_transferred": sftp_result["files_transferred"],
-                                                       "total_size_bytes": sftp_result["total_size_bytes"]})
+                    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer completed successfully")
+                    _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer completed successfully files={sftp_result['files_transferred']} size_bytes={sftp_result['total_size_bytes']}")
+                    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "transfer_completed", "stage": "uploading", "status": "completed", "files_transferred": sftp_result["files_transferred"], "total_size_bytes": sftp_result["total_size_bytes"], "command": "pxxl launch transfer"})
                     if emit:
                         try:
                             emit({
@@ -2346,10 +2339,10 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                         except Exception:
                             pass
                 else:
-                    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP transfer failed: {sftp_result['error']}")
-                    _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] SFTP transfer failed error={sftp_result['error']}")
-                    _append_line(error_log_path, f"SFTP transfer error: {sftp_result['error']}")
-                    _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "sftp_transfer_error", "error": sftp_result["error"]})
+                    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer failed")
+                    _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer failed")
+                    _append_line(error_log_path, "pxxl transfer: error during artifact transfer")
+                    _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "transfer_error", "stage": "uploading", "status": "error", "command": "pxxl launch transfer"})
                     if emit:
                         try:
                             emit({
@@ -2365,11 +2358,10 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                             pass
                     
             except Exception as sftp_error:
-                error_msg = f"SFTP transfer exception: {str(sftp_error)}"
-                _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {error_msg}")
-                _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {error_msg}")
-                _append_line(error_log_path, error_msg)
-                _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "sftp_transfer_exception", "error": error_msg})
+                _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer encountered an exception")
+                _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer encountered an exception")
+                _append_line(error_log_path, "pxxl transfer: exception during artifact transfer")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "transfer_exception", "stage": "uploading", "status": "error", "command": "pxxl launch transfer"})
                 sftp_result = {"status": "error", "error": error_msg}
 
         # Write a summary JSON for convenience
@@ -2390,13 +2382,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                 if compressed_image_path:
                     summary_data["compressed_image_path"] = compressed_image_path
                     summary_data["compressed_image_size_bytes"] = os.path.getsize(compressed_image_path) if os.path.exists(compressed_image_path) else 0
-                if sftp_host and sftp_username:
-                    summary_data["sftp_params"] = {
-                        "host": sftp_host,
-                        "port": sftp_port or 22,
-                        "username": sftp_username,
-                        "used_password": bool(sftp_password),
-                    }
+                # Do not include sensitive SFTP connection parameters in summary
                 if sftp_result:
                     summary_data["sftp_deployment"] = sftp_result
                     try:
@@ -2417,16 +2403,6 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             "logs": logs_collected[-10:],
             # Surface SFTP outcome (success/error) and params in the response for debugging
             "sftp_deployment": sftp_result,
-            "sftp_params": (
-                {
-                    "host": sftp_host,
-                    "port": sftp_port or 22,
-                    "username": sftp_username,
-                    "used_password": bool(sftp_password),
-                }
-                if (sftp_host and sftp_username)
-                else None
-            ),
         }
     except Exception as e:
         # Append error logs

@@ -154,9 +154,29 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
                 pass
         def _ts() -> str:
             return time.strftime('%Y-%m-%dT%H:%M:%S')
-        _append_line(events_log_path, "uploading completed")
-        _append_build(build_log_path, "uploading completed")
-        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "upload_completed"})
+        _append_line(
+            events_log_path,
+            f"Uploading stage completed: task_id={req.task_id} app_id={req.app_id or 'unknown'}. Artifact uploaded successfully; preparing to start signing stage."
+        )
+        _append_build(
+            build_log_path,
+            f"Uploading stage completed. Next stage: signing. task_id={req.task_id} app_id={req.app_id or 'unknown'}"
+        )
+        _append_json(
+            build_structured_path,
+            {
+                "ts": _ts(),
+                "level": "info",
+                "event": "upload_completed",
+                "stage": "uploading",
+                "status": "completed",
+                "next_stage": "signing",
+                "task_id": req.task_id,
+                "app_id": req.app_id,
+                "command": "pxxl launch upload",
+                "brand": "pxxl",
+            }
+        )
         # Infer app_id if missing
         if not req.app_id:
             build_jsonl_path = os.path.join(builds_dir, "build.jsonl")
@@ -192,12 +212,63 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
             _write_json(summary_path, summary_obj)
         except Exception:
             pass
-        _append_line(events_log_path, "signing starting")
-        _append_build(build_log_path, "signing starting")
-        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "signing_in_progress"})
+        # Include domain if available in summary
+        domain = summary_obj.get("domain") or summary_obj.get("nginx_domain")
+        _append_line(
+            events_log_path,
+            (
+                f"pxxl signing: starting for app_id={req.app_id} task_id={req.task_id}. "
+                f"domain={domain or 'not set'} target_container={container_name or 'n/a'}"
+            )
+        )
+        _append_build(
+            build_log_path,
+            f"pxxl signing: started. domain={domain or 'not set'} target_container={container_name or 'n/a'}"
+        )
+        _append_json(
+            build_structured_path,
+            {
+                "ts": _ts(),
+                "level": "info",
+                "event": "signing_started",
+                "stage": "signing",
+                "status": "in_progress",
+                "task_id": req.task_id,
+                "app_id": req.app_id,
+                "container": container_name,
+                "port": req.port,
+                "old_container": req.old_container,
+                "domain": domain,
+                "command": "pxxl launch sign-domain",
+                "brand": "pxxl",
+                "note": "Status-only signing; sanitized logs without sensitive endpoints.",
+            }
+        )
 
-        _append_line(events_log_path, "signing completed")
-        _append_build(build_log_path, "signing completed")
+        _append_line(
+            events_log_path,
+            f"pxxl signing: completed for app_id={req.app_id} task_id={req.task_id}. domain={domain or 'not set'}"
+        )
+        _append_build(
+            build_log_path,
+            f"pxxl signing: completed successfully. active_container={container_name or 'n/a'}"
+        )
+        _append_json(
+            build_structured_path,
+            {
+                "ts": _ts(),
+                "level": "info",
+                "event": "signing_completed",
+                "stage": "signing",
+                "status": "completed",
+                "task_id": req.task_id,
+                "app_id": req.app_id,
+                "container": container_name,
+                "domain": domain,
+                "command": "pxxl launch sign-domain",
+                "brand": "pxxl",
+            }
+        )
         _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "signing_completed"})
         try:
             summary_obj.update({"status": "completed", "stage": "signed"})
@@ -682,10 +753,7 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
                     sftp_info = summary_obj.get("sftp_deployment")
                     if sftp_info:
                         build_info["sftp"] = sftp_info
-                    # Surface SFTP params (host, port, username) for debugging
-                    sftp_params = summary_obj.get("sftp_params")
-                    if sftp_params:
-                        build_info["sftp_params"] = sftp_params
+                    # Do not surface sensitive SFTP params in API response
                 except Exception:
                     pass
             
