@@ -611,7 +611,7 @@ def local_run_from_lz4(
             image=image_id or (image_tag or ''),
             name=container_name,
             command=command,
-            ports=ports,
+            ports=None,  # No external port bindings - use Traefik labels for routing
             env=env,
             volumes=volumes_arg,
             mem_limit=memory,
@@ -649,14 +649,12 @@ def local_run_from_lz4(
             details = client.api.inspect_container(cid) or {}
             state = details.get("State") or {}
             running_now = bool(state.get("Running"))
-            # Inspect port bindings for first internal port key
+            # Extract internal port number from internal_port_key (e.g., "80/tcp" -> 80)
             try:
-                ports_map = ((details.get("NetworkSettings") or {}).get("Ports") or {})
-                bindings = ports_map.get(internal_port_key) or []
-                if bindings:
-                    inspected_host_port = int(bindings[0].get("HostPort")) if bindings[0].get("HostPort") else None
+                internal_port_num = int(internal_port_key.split('/')[0]) if internal_port_key else 80
+                inspected_host_port = internal_port_num  # Use internal port since no external binding
             except Exception:
-                inspected_host_port = None
+                inspected_host_port = 80  # Default to port 80 for Traefik routing
             # If container exited quickly, try to capture last logs for debugging
             if not running_now:
                 try:
