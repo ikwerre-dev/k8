@@ -1,6 +1,9 @@
 import threading
 import time
 import uuid
+import os
+import hashlib
+import random
 from typing import Dict, Any, Optional
 
 _lock = threading.Lock()
@@ -8,7 +11,22 @@ _tasks: Dict[str, Dict[str, Any]] = {}
 
 
 def create_task(task_type: str) -> str:
-    task_id = f"{task_type}-{uuid.uuid4().hex[:10]}"
+    # Generate timestamp component (microsecond precision)
+    timestamp = int(time.time() * 1000000)  # microseconds since epoch
+    
+    # Generate machine/process identifier
+    machine_id = hashlib.md5(f"{os.getpid()}-{os.uname().nodename}".encode()).hexdigest()[:8]
+    
+    # Generate extended UUID component (full 32 characters)
+    uuid_component = uuid.uuid4().hex
+    
+    # Add additional entropy with random component
+    entropy = random.randint(10000, 99999)
+    
+    # Create longer, more unique task ID
+    # Format: {task_type}-{timestamp}-{machine_id}-{uuid}-{entropy}
+    task_id = f"{task_type}-{timestamp}-{machine_id}-{uuid_component}-{entropy}"
+    
     with _lock:
         _tasks[task_id] = {
             "task_type": task_type,
