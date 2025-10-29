@@ -361,6 +361,8 @@ def local_run_from_lz4(
     events_log_path = os.path.join(task_logs_dir, "events.log")
     error_log_path = os.path.join(task_logs_dir, "error.log")
     summary_path = os.path.join(task_logs_dir, "build.info.json")
+    # File to store raw container stdout/stderr captured during local run
+    container_logs_path = os.path.join(task_logs_dir, "container.logs.txt")
     # Prefer app_id from build.info.json over payload 
     try:
         with open(summary_path, "r") as f:
@@ -566,6 +568,12 @@ def local_run_from_lz4(
         container_name = name or None
     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl run: starting container")
     _append_line(build_log_path, f"[INFO ] pxxl run: starting container image={(image_id or (image_tag or ''))} name={container_name} network=traefik-network")
+    if command:
+        try:
+            _append_line(build_log_path, f"[INFO ] run command: {command}")
+            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "run_command", "command": command})
+        except Exception:
+            pass
     _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "run_start", "stage": "running", "status": "starting", "command": "pxxl launch run"})
 
     # Map cpu to nano_cpus if provided
@@ -655,6 +663,22 @@ def local_run_from_lz4(
                 inspected_host_port = internal_port_num  # Use internal port since no external binding
             except Exception:
                 inspected_host_port = 80  # Default to port 80 for Traefik routing
+
+            # Capture initial container logs regardless of running state
+            try:
+                c_obj = client.containers.get(cid)
+                logs_tail = c_obj.logs(tail=200)
+                logs_text = logs_tail.decode("utf-8", errors="ignore") if isinstance(logs_tail, (bytes, bytearray)) else str(logs_tail)
+                if logs_text:
+                    _append_line(build_log_path, f"[INFO ] container initial logs:\n{logs_text}")
+                    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "container_logs_initial", "lines": logs_text.splitlines()[-200:]})
+                    try:
+                        with open(container_logs_path, "a") as f:
+                            f.write(logs_text + "\n")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             # If container exited quickly, try to capture last logs for debugging
             if not running_now:
                 try:
