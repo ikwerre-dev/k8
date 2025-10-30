@@ -90,10 +90,10 @@ class ContainerResourceUpdateRequest(BaseModel):
     cpuset_cpus: Optional[str] = None  # CPU set string, e.g., "0-2"
     cpuset_mems: Optional[str] = None  # Memory nodes, e.g., "0-1"
     memswap_limit: Optional[str] = None  # Memory + swap limit
+    recreate_on_conflict: Optional[bool] = True
 
 @app.post("/docker/container/update-resources")
 def docker_container_update_resources(req: ContainerResourceUpdateRequest):
-    """Update CPU and memory limits for a running container"""
     try:
         # Determine container ID/name
         container_id = req.container_id_or_name
@@ -118,17 +118,39 @@ def docker_container_update_resources(req: ContainerResourceUpdateRequest):
         if req.cpu is not None:
             nano_cpus = int(float(req.cpu) * 1_000_000_000)
         
-        # Update container resources
-        result = ds.update_container_resources(
-            id_or_name=container_id,
-            mem_limit=req.memory,
-            nano_cpus=nano_cpus,
-            cpu_shares=req.cpu_shares,
-            pids_limit=req.pids_limit,
-            cpuset_cpus=req.cpuset_cpus,
-            cpuset_mems=req.cpuset_mems,
-            memswap_limit=req.memswap_limit
-        )
+        # Update container resources with conflict handling
+        try:
+            result = ds.update_container_resources(
+                id_or_name=container_id,
+                mem_limit=req.memory,
+                nano_cpus=nano_cpus,
+                cpu_shares=req.cpu_shares,
+                pids_limit=req.pids_limit,
+                cpuset_cpus=req.cpuset_cpus,
+                cpuset_mems=req.cpuset_mems,
+                memswap_limit=req.memswap_limit
+            )
+            status = "updated"
+            new_container_id = result.get("id")
+            new_container_name = None
+        except Exception as e:
+            msg = str(e)
+            conflict = ("Conflicting options" in msg and "NanoCPUs" in msg) or ("409" in msg and "NanoCPUs" in msg)
+            if conflict and req.recreate_on_conflict:
+                run_res = ds.recreate_with_resources(
+                    id_or_name=container_id,
+                    mem_limit=req.memory,
+                    nano_cpus=nano_cpus,
+                    cpu_shares=req.cpu_shares,
+                    cpuset_cpus=req.cpuset_cpus,
+                    cpuset_mems=req.cpuset_mems,
+                    memswap_limit=req.memswap_limit,
+                )
+                status = "recreated"
+                new_container_id = run_res.get("id")
+                new_container_name = run_res.get("name")
+            else:
+                raise
         
         # Log the update if task_id is provided
         if req.task_id:
@@ -138,7 +160,7 @@ def docker_container_update_resources(req: ContainerResourceUpdateRequest):
                 # Log to events.log
                 events_log_path = os.path.join(builds_dir, "events.log")
                 with open(events_log_path, "a") as f:
-                    f.write(f"Container resource update: {container_id}\n")
+                    f.write(f"Container resource {status}: {container_id}\n")
                     if req.memory:
                         f.write(f"  Memory limit: {req.memory}\n")
                     if req.cpu:
@@ -164,6 +186,10 @@ def docker_container_update_resources(req: ContainerResourceUpdateRequest):
                         resources["cpu_shares"] = req.cpu_shares
                     if req.cpuset_cpus:
                         resources["cpuset"] = req.cpuset_cpus
+                    if new_container_id:
+                        summary_obj["container_id"] = new_container_id
+                    if new_container_name:
+                        summary_obj["container_name"] = new_container_name
                     
                     localrun["resources"] = resources
                     summary_obj["localrun"] = localrun
@@ -174,8 +200,8 @@ def docker_container_update_resources(req: ContainerResourceUpdateRequest):
                 pass  # Don't fail the update if logging fails
         
         return {
-            "status": "updated",
-            "container_id": result.get("id"),
+            "status": status,
+            "container_id": new_container_id,
             "task_id": req.task_id,
             "resources": {
                 "memory": req.memory,

@@ -306,6 +306,58 @@ def update_container_resources(id_or_name: str, mem_limit: Optional[str] = None,
     c.update(**kwargs)
     return {"status": "ok", "id": c.id}
 
+def recreate_with_resources(id_or_name: str, mem_limit: Optional[str] = None, nano_cpus: Optional[int] = None, cpu_shares: Optional[int] = None, cpuset_cpus: Optional[str] = None, cpuset_mems: Optional[str] = None, memswap_limit: Optional[str] = None) -> dict:
+    client = get_client()
+    container = client.containers.get(id_or_name)
+    env = _extract_env_from_container(container)
+    cfg = container.attrs.get("Config", {}) or {}
+    cmd_list = cfg.get("Cmd")
+    command = None
+    if isinstance(cmd_list, list) and cmd_list:
+        if len(cmd_list) == 1:
+            command = cmd_list[0]
+        else:
+            command = " ".join(cmd_list)
+    elif isinstance(cmd_list, str) and cmd_list.strip():
+        command = cmd_list
+    image = (container.image.tags[0] if container.image.tags else container.image.id)
+    name = container.name
+    network_mode = (container.attrs.get("HostConfig", {}) or {}).get("NetworkMode")
+    host_config = container.attrs.get("HostConfig", {}) or {}
+    port_bindings = host_config.get("PortBindings", {}) or {}
+    ports = {}
+    for container_port, host_bindings in port_bindings.items():
+        if host_bindings and len(host_bindings) > 0:
+            host_port = host_bindings[0].get("HostPort")
+            if host_port:
+                ports[container_port] = int(host_port)
+    volumes = _extract_volumes_from_container(container)
+    try:
+        container.stop()
+    except Exception:
+        pass
+    try:
+        container.remove(force=True)
+    except Exception:
+        pass
+    run_res = run_container_extended(
+        image=image,
+        name=name,
+        command=command,
+        env=env,
+        volumes=volumes,
+        network=network_mode,
+        ports=ports if ports else None,
+        mem_limit=mem_limit,
+        nano_cpus=nano_cpus,
+        cpu_shares=cpu_shares,
+        cpuset_cpus=cpuset_cpus,
+        cpuset_mems=cpuset_mems,
+        memswap_limit=memswap_limit,
+        detach=True,
+    )
+    return run_res
+
 
 def run_container_extended(
     image: str,
