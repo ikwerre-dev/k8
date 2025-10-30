@@ -1600,3 +1600,164 @@ def docker_build_cleanup(req: BuildCleanupRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class TaskCleanupRequest(BaseModel):
+    task_id: str
+    force: Optional[bool] = True
+    prune_images: Optional[bool] = True
+    remove_image: Optional[bool] = True
+
+@app.post("/docker/task/cleanup")
+def docker_task_cleanup(req: TaskCleanupRequest):
+    try:
+        # Resolve runtime paths and summary info
+        summary_path, builds_dir = _resolve_summary_path(req.task_id)
+        try:
+            with open(summary_path, "r") as f:
+                summary_obj = json.load(f)
+        except Exception:
+            summary_obj = {}
+
+        import time
+        os.makedirs(builds_dir, exist_ok=True)
+        events_log_path = os.path.join(builds_dir, "events.log")
+        build_log_path = os.path.join(builds_dir, "build.log")
+        build_structured_path = os.path.join(builds_dir, "build.jsonl")
+
+        def _append_line(path: str, msg: str):
+            try:
+                now = time.strftime('%Y-%m-%d %H:%M:%S')
+                with open(path, "a") as f:
+                    f.write(f"[{now}] {msg}\n")
+            except Exception:
+                pass
+
+        def _append_build(path: str, msg: str, level: str = "info"):
+            try:
+                now = time.strftime('%Y-%m-%d %H:%M:%S')
+                prefix = "[ERROR]" if str(level).lower() == "error" else "[INFO ]"
+                with open(path, "a") as f:
+                    f.write(f"[{now}] {prefix} {msg}\n")
+            except Exception:
+                pass
+
+        def _append_json(path: str, obj: dict):
+            try:
+                with open(path, "a") as f:
+                    f.write(json.dumps(obj) + "\n")
+            except Exception:
+                pass
+
+        def _ts():
+            return time.strftime('%Y-%m-%d %H:%M:%S')
+
+        # Identify container and image from summary
+        cid = summary_obj.get("container_name") or summary_obj.get("container_id")
+        image_tag = (summary_obj.get("localrun", {}) or {}).get("image_tag") or summary_obj.get("tag")
+
+        result = {"task_id": req.task_id, "container": {}, "image": {}, "volumes": [], "runtime_cleanup": {}, "prune": {}}
+
+        # Inspect container mounts to gather attached volume names (before removal)
+        attached_volume_names = []
+        if cid:
+            try:
+                details = ds.inspect_container_details(cid)
+                mounts = details.get("mounts") or []
+                for m in mounts:
+                    if (m.get("Type") == "volume") and m.get("Name"):
+                        attached_volume_names.append(m.get("Name"))
+            except Exception:
+                attached_volume_names = []
+
+        # Remove container
+        if cid:
+            try:
+                _append_line(events_log_path, f"cleanup: removing container {cid}")
+                _append_build(build_log_path, f"cleanup: removing container {cid}")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cleanup_container_remove", "task_id": req.task_id, "container": cid})
+                cres = ds.remove_container(cid, force=bool(req.force))
+                result["container"] = {"removed": True, "id": cres.get("id"), "name": cres.get("name")}
+            except Exception as e:
+                msg = str(e)
+                result["container"] = {"removed": False, "error": msg}
+                _append_line(events_log_path, f"cleanup: remove container failed: {msg}")
+                _append_build(build_log_path, f"cleanup: remove container failed: {msg}", level="error")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "cleanup_container_error", "task_id": req.task_id, "error": msg})
+        else:
+            result["container"] = {"removed": False, "message": "no container recorded in summary"}
+
+        # Delete attached named volumes (after container removal)
+        for vname in attached_volume_names:
+            try:
+                _append_line(events_log_path, f"cleanup: deleting attached volume {vname}")
+                _append_build(build_log_path, f"cleanup: deleting attached volume {vname}")
+                vres = ds.delete_volume_with_attachment_check(vname, force=bool(req.force))
+                result["volumes"].append({"volume": vname, "status": vres.get("status"), "message": vres.get("message")})
+                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cleanup_volume_delete", "task_id": req.task_id, "volume": vname, "result": vres})
+            except Exception as e:
+                msg = str(e)
+                result["volumes"].append({"volume": vname, "status": "error", "error": msg})
+                _append_line(events_log_path, f"cleanup: delete volume {vname} failed: {msg}")
+                _append_build(build_log_path, f"cleanup: delete volume {vname} failed: {msg}", level="error")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "cleanup_volume_error", "task_id": req.task_id, "volume": vname, "error": msg})
+
+        # Remove image (optional)
+        if req.remove_image and image_tag:
+            try:
+                _append_line(events_log_path, f"cleanup: removing image {image_tag}")
+                _append_build(build_log_path, f"cleanup: removing image {image_tag}")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cleanup_image_remove", "task_id": req.task_id, "image": image_tag})
+                ires = ds.remove_image(image_tag, force=bool(req.force))
+                result["image"] = {"removed": True, "image": ires.get("image")}
+            except Exception as e:
+                msg = str(e)
+                result["image"] = {"removed": False, "error": msg, "image": image_tag}
+                _append_line(events_log_path, f"cleanup: remove image failed: {msg}")
+                _append_build(build_log_path, f"cleanup: remove image failed: {msg}", level="error")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "cleanup_image_error", "task_id": req.task_id, "error": msg})
+        else:
+            if req.remove_image:
+                result["image"] = {"removed": False, "message": "no image tag recorded in summary"}
+            else:
+                result["image"] = {"removed": False, "message": "image removal skipped"}
+
+        # Prune unused images (optional)
+        if req.prune_images:
+            try:
+                _append_line(events_log_path, "cleanup: pruning unused images")
+                _append_build(build_log_path, "cleanup: pruning unused images")
+                pres = ds.prune_images()
+                result["prune"] = {"status": "ok", "summary": pres}
+                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cleanup_prune_images", "task_id": req.task_id, "prune": pres})
+            except Exception as e:
+                msg = str(e)
+                result["prune"] = {"status": "error", "error": msg}
+                _append_line(events_log_path, f"cleanup: prune images failed: {msg}")
+                _append_build(build_log_path, f"cleanup: prune images failed: {msg}", level="error")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "cleanup_prune_images_error", "task_id": req.task_id, "error": msg})
+
+        # Runtime directory cleanup
+        try:
+            if os.path.isdir(builds_dir):
+                _append_line(events_log_path, f"cleanup: deleting runtime dir {builds_dir}")
+                _append_build(build_log_path, f"cleanup: deleting runtime dir {builds_dir}")
+                shutil.rmtree(builds_dir)
+                result["runtime_cleanup"] = {"deleted": True, "path": builds_dir}
+                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cleanup_runtime_deleted", "task_id": req.task_id, "path": builds_dir})
+            else:
+                result["runtime_cleanup"] = {"deleted": False, "message": "runtime dir not found", "path": builds_dir}
+                _append_line(events_log_path, f"cleanup: runtime dir not found {builds_dir}")
+                _append_build(build_log_path, f"cleanup: runtime dir not found {builds_dir}")
+        except Exception as e:
+            msg = str(e)
+            result["runtime_cleanup"] = {"deleted": False, "error": msg, "path": builds_dir}
+            _append_line(events_log_path, f"cleanup: delete runtime dir failed: {msg}")
+            _append_build(build_log_path, f"cleanup: delete runtime dir failed: {msg}", level="error")
+            _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "cleanup_runtime_error", "task_id": req.task_id, "error": msg})
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
