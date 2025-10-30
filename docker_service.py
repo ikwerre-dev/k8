@@ -282,7 +282,16 @@ def kill_container(id_or_name: str, signal: str = "SIGKILL") -> dict:
 def update_container_resources(id_or_name: str, mem_limit: Optional[str] = None, nano_cpus: Optional[int] = None, cpu_shares: Optional[int] = None, pids_limit: Optional[int] = None, cpuset_cpus: Optional[str] = None, cpuset_mems: Optional[str] = None, memswap_limit: Optional[str] = None) -> dict:
     client = get_client()
     c = client.containers.get(id_or_name)
-    c.update(mem_limit=mem_limit, nano_cpus=nano_cpus, cpu_shares=cpu_shares, pids_limit=pids_limit, cpuset_cpus=cpuset_cpus, cpuset_mems=cpuset_mems, memswap_limit=memswap_limit)
+    cpu_quota = None
+    cpu_period = None
+    if nano_cpus is not None:
+        try:
+            cpu_period = 100000
+            cpu_quota = int((int(nano_cpus) / 1000000000) * cpu_period)
+        except Exception:
+            cpu_quota = None
+            cpu_period = None
+    c.update(mem_limit=mem_limit, cpu_shares=cpu_shares, pids_limit=pids_limit, cpuset_cpus=cpuset_cpus, cpuset_mems=cpuset_mems, memswap_limit=memswap_limit, cpu_quota=cpu_quota, cpu_period=cpu_period)
     return {"status": "ok", "id": c.id}
 
 
