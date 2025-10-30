@@ -78,6 +78,118 @@ def docker_network_create(req: NetworkCreateRequest):
     try:
         return ds.create_network(name=req.name, driver=req.driver or "bridge")
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ContainerResourceUpdateRequest(BaseModel):
+    task_id: Optional[str] = None
+    container_id_or_name: Optional[str] = None
+    memory: Optional[str] = None  # e.g., "512m", "1g"
+    cpu: Optional[float] = None  # CPUs to allocate (e.g., 0.5, 1.0)
+    cpu_shares: Optional[int] = None  # CPU shares (relative weight)
+    pids_limit: Optional[int] = None  # Process limit
+    cpuset_cpus: Optional[str] = None  # CPU set string, e.g., "0-2"
+    cpuset_mems: Optional[str] = None  # Memory nodes, e.g., "0-1"
+    memswap_limit: Optional[str] = None  # Memory + swap limit
+
+@app.post("/docker/container/update-resources")
+def docker_container_update_resources(req: ContainerResourceUpdateRequest):
+    """Update CPU and memory limits for a running container"""
+    try:
+        # Determine container ID/name
+        container_id = req.container_id_or_name
+        
+        if not container_id and req.task_id:
+            # Get container from task_id
+            summary_path, builds_dir = _resolve_summary_path(req.task_id)
+            if not os.path.exists(summary_path):
+                raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
+            with open(summary_path, "r") as f:
+                summary_obj = json.load(f)
+            container_id = summary_obj.get("container_name") or summary_obj.get("container_id")
+            if not container_id:
+                upstream = (summary_obj.get("upstream", {}) or {})
+                container_id = upstream.get("upstream_host")
+        
+        if not container_id:
+            raise HTTPException(status_code=400, detail="container_id_or_name or task_id with valid container required")
+        
+        # Convert CPU to nano_cpus if provided
+        nano_cpus = None
+        if req.cpu is not None:
+            nano_cpus = int(float(req.cpu) * 1_000_000_000)
+        
+        # Update container resources
+        result = ds.update_container_resources(
+            id_or_name=container_id,
+            mem_limit=req.memory,
+            nano_cpus=nano_cpus,
+            cpu_shares=req.cpu_shares,
+            pids_limit=req.pids_limit,
+            cpuset_cpus=req.cpuset_cpus,
+            cpuset_mems=req.cpuset_mems,
+            memswap_limit=req.memswap_limit
+        )
+        
+        # Log the update if task_id is provided
+        if req.task_id:
+            try:
+                summary_path, builds_dir = _resolve_summary_path(req.task_id)
+                
+                # Log to events.log
+                events_log_path = os.path.join(builds_dir, "events.log")
+                with open(events_log_path, "a") as f:
+                    f.write(f"Container resource update: {container_id}\n")
+                    if req.memory:
+                        f.write(f"  Memory limit: {req.memory}\n")
+                    if req.cpu:
+                        f.write(f"  CPU limit: {req.cpu}\n")
+                    if req.cpu_shares:
+                        f.write(f"  CPU shares: {req.cpu_shares}\n")
+                    if req.cpuset_cpus:
+                        f.write(f"  CPU set: {req.cpuset_cpus}\n")
+                
+                # Update summary with new resource limits
+                if os.path.exists(summary_path):
+                    with open(summary_path, "r") as f:
+                        summary_obj = json.load(f)
+                    
+                    localrun = summary_obj.get("localrun", {}) or {}
+                    resources = localrun.get("resources", {}) or {}
+                    
+                    if req.memory:
+                        resources["memory"] = req.memory
+                    if req.cpu:
+                        resources["cpu"] = req.cpu
+                    if req.cpu_shares:
+                        resources["cpu_shares"] = req.cpu_shares
+                    if req.cpuset_cpus:
+                        resources["cpuset"] = req.cpuset_cpus
+                    
+                    localrun["resources"] = resources
+                    summary_obj["localrun"] = localrun
+                    
+                    with open(summary_path, "w") as f:
+                        json.dump(summary_obj, f, indent=2)
+            except Exception:
+                pass  # Don't fail the update if logging fails
+        
+        return {
+            "status": "updated",
+            "container_id": result.get("id"),
+            "task_id": req.task_id,
+            "resources": {
+                "memory": req.memory,
+                "cpu": req.cpu,
+                "cpu_shares": req.cpu_shares,
+                "cpuset_cpus": req.cpuset_cpus,
+                "cpuset_mems": req.cpuset_mems,
+                "pids_limit": req.pids_limit,
+                "memswap_limit": req.memswap_limit
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) 
 
 @app.post("/docker/localrun")
