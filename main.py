@@ -350,6 +350,22 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
                 json.dump(summary_obj, f, indent=2)
         except Exception:
             pass
+
+        # Cleanup: delete build.tar in the upload/task_id directory after signing
+        try:
+            build_tar_path = os.path.join(builds_dir, "build.tar")
+            if os.path.exists(build_tar_path):
+                os.remove(build_tar_path)
+                _append_line(events_log_path, f"pxxl signing: cleanup removed build.tar at {build_tar_path}")
+                _append_build(build_log_path, f"cleanup: removed build.tar")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cleanup_build_tar", "removed": build_tar_path})
+            else:
+                _append_line(events_log_path, f"pxxl signing: cleanup skipped, build.tar not found")
+                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "cleanup_build_tar_skipped"})
+        except Exception as ce:
+            _append_line(events_log_path, f"pxxl signing: cleanup warning {ce}")
+            _append_build(build_log_path, f"cleanup warning: {ce}", level="error")
+            _append_json(build_structured_path, {"ts": _ts(), "level": "warn", "event": "cleanup_warning", "error": str(ce)})
         return {
             "stage": "signing_domain",
             "status": "completed",
