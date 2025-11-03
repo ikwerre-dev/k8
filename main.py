@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request
+from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from typing import Optional, Dict
 import os
@@ -15,7 +16,24 @@ import nginx_service as ns
 import task_service as ts
 import db_service as db
  
-app = FastAPI(title="Docker Manager API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        db.init_db()
+        conn = db.get_conn()
+        cur = conn.execute("PRAGMA quick_check")
+        row = cur.fetchone()
+        status = row[0] if row else None
+        if status != "ok":
+            raise RuntimeError("database integrity check failed")
+        conn.execute("SELECT COUNT(*) FROM applications")
+        conn.execute("SELECT COUNT(*) FROM metrics")
+        yield
+    except Exception as e:
+        raise RuntimeError(f"database startup failed: {e}")
+
+app = FastAPI(title="Docker Manager API", lifespan=lifespan)
+
 
 # Helper to resolve build.info.json across candidate directories
 def _resolve_summary_path(task_id: str):
