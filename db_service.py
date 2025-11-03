@@ -4,7 +4,32 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "app.db")
+NEW_DB_DIR = "/db"
+FALLBACK_DB_DIR = os.path.join(os.path.dirname(__file__), "db")
+DB_PATH = os.path.join(NEW_DB_DIR, "app.db")
+OLD_DB_PATH = os.path.join(os.path.dirname(__file__), "app.db")
+try:
+    os.makedirs(NEW_DB_DIR, exist_ok=True)
+    if not os.path.exists(DB_PATH) and os.path.exists(OLD_DB_PATH):
+        try:
+            os.replace(OLD_DB_PATH, DB_PATH)
+        except Exception:
+            pass
+except Exception:
+    pass
+use_path = DB_PATH
+if not os.path.isdir(NEW_DB_DIR) or not os.access(NEW_DB_DIR, os.W_OK):
+    use_path = os.path.join(FALLBACK_DB_DIR, "app.db")
+    try:
+        os.makedirs(FALLBACK_DB_DIR, exist_ok=True)
+        if not os.path.exists(use_path) and os.path.exists(OLD_DB_PATH):
+            try:
+                os.replace(OLD_DB_PATH, use_path)
+            except Exception:
+                pass
+    except Exception:
+        pass
+DB_PATH = use_path
 _conn: Optional[sqlite3.Connection] = None
 _lock = threading.Lock()
 
