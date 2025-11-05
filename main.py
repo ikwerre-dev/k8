@@ -1404,6 +1404,13 @@ class VolumeCreateRequest(BaseModel):
     driver: Optional[str] = "local"
     labels: Optional[Dict[str, str]] = None
 
+@app.get("/docker/container/list")
+def docker_container_list(all: Optional[bool] = False):
+    try:
+        return {"containers": ds.list_containers(all=bool(all))}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/docker/volume/create")
 def docker_volume_create(req: VolumeCreateRequest):
     try:
@@ -1572,6 +1579,13 @@ def database_create(req: DatabaseCreateRequest):
         )
         if isinstance(res, dict) and res.get("status") == "error":
             raise HTTPException(status_code=400, detail=res)
+        try:
+            name_val = (res.get("name") if isinstance(res, dict) else (req.container_name or ""))
+            id_val = (res.get("id") if isinstance(res, dict) else None)
+            if name_val:
+                db.upsert_application(name_val, id_val)
+        except Exception:
+            pass
         return res
     except HTTPException:
         raise
@@ -1713,6 +1727,10 @@ def database_logs_json(req: DatabaseLogsJsonRequest):
 def docker_container_start_by_name(req: ContainerNameRequest):
     try:
         res = ds.start_container(req.name)
+        try:
+            db.upsert_application(req.name, (res.get("id") if isinstance(res, dict) else None))
+        except Exception:
+            pass
         return res
     except HTTPException:
         raise
@@ -1727,6 +1745,10 @@ def docker_container_start_by_name(req: ContainerNameRequest):
 def docker_container_restart_by_name(req: ContainerNameRequest):
     try:
         res = ds.restart_container(req.name)
+        try:
+            db.upsert_application(req.name, (res.get("id") if isinstance(res, dict) else None))
+        except Exception:
+            pass
         return res
     except HTTPException:
         raise
@@ -1734,6 +1756,19 @@ def docker_container_restart_by_name(req: ContainerNameRequest):
         msg = str(e)
         if "No such" in msg or "not found" in msg:
             raise HTTPException(status_code=404, detail={"status": "not_found", "name": req.name, "error": msg})
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/docker/container/inspect/{id_or_name}")
+def docker_container_inspect(id_or_name: str):
+    try:
+        details = ds.inspect_container_details(id_or_name)
+        return {"container": details}
+    except HTTPException:
+        raise
+    except Exception as e:
+        msg = str(e)
+        if "No such" in msg or "not found" in msg:
+            raise HTTPException(status_code=404, detail={"status": "not_found", "id_or_name": id_or_name, "error": msg})
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -15,6 +15,9 @@ docker run -d \
   --name k8-container \
   k8-app
 
+do
+/etc/traefik/certs
+
 
 build server:
 
