@@ -239,7 +239,7 @@ def docker_container_update_resources(req: ContainerResourceUpdateRequest):
 @app.post("/docker/localrun")
 def docker_localrun(req: LocalRunRequest):
     try:
-        return ds.local_run_from_lz4(
+        res = ds.local_run_from_lz4(
             lz4_path_rel=req.lz4_path,
             task_id=req.task_id,
             app_id=req.app_id,
@@ -255,6 +255,22 @@ def docker_localrun(req: LocalRunRequest):
             mount_path=req.mount_path,
             mode=req.mode or "rw",
         )
+        try:
+            aid = req.app_id or (res.get("app_id") if isinstance(res, dict) else None) or (res.get("container_name") if isinstance(res, dict) else None) or req.name
+            cid = (res.get("container_id") if isinstance(res, dict) else None) or ((res.get("container") or {}).get("id") if isinstance(res, dict) else None)
+            if aid:
+                db.upsert_application(aid, cid)
+                if cid:
+                    try:
+                        stats = ds.get_container_stats(cid)
+                        cpu = _cpu_percent(stats)
+                        ram = _mem_usage(stats)
+                        db.add_metric(aid, cpu=cpu, ram=ram)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        return res
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
