@@ -92,6 +92,8 @@ def add_metric(app_id: str, cpu: float, ram: int, timecreated: Optional[str] = N
                 "INSERT INTO metrics(app_id, timecreated, cpu, ram) VALUES(?,?,?,?)",
                 (app_id, ts, cpu, ram),
             )
+            cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 7 * 24 * 60 * 60))
+            conn.execute("DELETE FROM metrics WHERE timecreated < ?", (cutoff,))
 
 
 def get_metrics(app_id: str, limit: int = 200) -> List[Dict[str, Any]]:
