@@ -550,69 +550,7 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.websocket("/terminal/{id_or_name}")
-async def terminal_ws(id_or_name: str, websocket: WebSocket):
-    await websocket.accept()
-    cmd_q = websocket.query_params.get("cmd")
-    cwd_q = websocket.query_params.get("cwd")
-    try:
-        res = ds.start_exec_pty(id_or_name=id_or_name, cmd=(cmd_q.split() if cmd_q else None), env=None, cwd=cwd_q)
-        sock = res["socket"]
-        exec_id = res["exec_id"]
-        await websocket.send_json({"exec_id": exec_id})
-    except Exception as e:
-        await websocket.close(code=1011, reason=str(e))
-        return
-    import asyncio
-    async def ws_to_docker():
-        try:
-            while True:
-                try:
-                    t = await websocket.receive_text()
-                    sock.sendall(t.encode("utf-8"))
-                except Exception:
-                    try:
-                        b = await websocket.receive_bytes()
-                        sock.sendall(b)
-                    except Exception:
-                        break
-        except Exception:
-            pass
-    async def docker_to_ws():
-        try:
-            while True:
-                data = await asyncio.to_thread(sock.recv, 4096)
-                if not data:
-                    break
-                try:
-                    await websocket.send_text(data.decode("utf-8", errors="ignore"))
-                except Exception:
-                    break
-        except Exception:
-            pass
-    try:
-        await asyncio.gather(ws_to_docker(), docker_to_ws())
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-        try:
-            await websocket.close()
-        except Exception:
-            pass
-
-class TerminalResizeRequest(BaseModel):
-    exec_id: str
-    width: int
-    height: int
-
-@app.post("/terminal/resize")
-def terminal_resize(req: TerminalResizeRequest):
-    try:
-        return ds.resize_exec(req.exec_id, req.width, req.height)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+ 
 
 @app.get("/terminal/test")
 def terminal_test(id: str, cmd: Optional[str] = "/bin/bash"):
@@ -1110,9 +1048,12 @@ async def terminal_ws(id_or_name: str, websocket: WebSocket):
                 if not data:
                     break
                 try:
-                    await websocket.send_text(data.decode("utf-8", errors="ignore"))
+                    await websocket.send_bytes(data)
                 except Exception:
-                    break
+                    try:
+                        await websocket.send_text(data.decode("utf-8", errors="ignore"))
+                    except Exception:
+                        break
         except Exception:
             pass
     try:
