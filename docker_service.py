@@ -2903,3 +2903,17 @@ def start_container(id_or_name: str) -> dict:
     c = client.containers.get(id_or_name)
     c.start()
     return {"status": "ok", "id": c.id, "name": c.name}
+
+
+def start_exec_pty(id_or_name: str, cmd: Optional[List[str]] = None, env: Optional[Dict[str, str]] = None, cwd: Optional[str] = None) -> Dict[str, Any]:
+    client = get_client()
+    command = cmd or ["/bin/sh"]
+    exec_id = client.api.exec_create(container=id_or_name, cmd=command, tty=True, attach_stdin=True, environment=env, working_dir=cwd)
+    sock = client.api.exec_start(exec_id, detach=False, tty=True, stream=False, socket=True)
+    return {"exec_id": exec_id, "socket": sock}
+
+
+def resize_exec(exec_id: str, width: int, height: int) -> Dict[str, Any]:
+    client = get_client()
+    client.api.exec_resize(exec_id, height=height, width=width)
+    return {"exec_id": exec_id, "width": width, "height": height}

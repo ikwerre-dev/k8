@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from typing import Optional, Dict
@@ -969,6 +969,70 @@ async def log_requests(request: Request, call_next):
     response = await call_next(request)
     print(f"[HTTP] {response.status_code} {request.method} {request.url.path}")
     return response
+
+@app.websocket("/terminal/{id_or_name}")
+async def terminal_ws(id_or_name: str, websocket: WebSocket):
+    await websocket.accept()
+    cmd_q = websocket.query_params.get("cmd")
+    cwd_q = websocket.query_params.get("cwd")
+    try:
+        res = ds.start_exec_pty(id_or_name=id_or_name, cmd=(cmd_q.split() if cmd_q else None), env=None, cwd=cwd_q)
+        sock = res["socket"]
+        exec_id = res["exec_id"]
+        await websocket.send_json({"exec_id": exec_id})
+    except Exception as e:
+        await websocket.close(code=1011, reason=str(e))
+        return
+    import asyncio
+    async def ws_to_docker():
+        try:
+            while True:
+                m = await websocket.receive()
+                if m.get("type") == "websocket.receive":
+                    if m.get("text") is not None:
+                        sock.sendall(m["text"].encode("utf-8"))
+                    elif m.get("bytes") is not None:
+                        sock.sendall(m["bytes"])
+                elif m.get("type") == "websocket.disconnect":
+                    break
+        except Exception:
+            pass
+    async def docker_to_ws():
+        try:
+            while True:
+                data = await asyncio.to_thread(sock.recv, 4096)
+                if not data:
+                    break
+                try:
+                    await websocket.send_text(data.decode("utf-8", errors="ignore"))
+                except Exception:
+                    break
+        except Exception:
+            pass
+    try:
+        await asyncio.gather(ws_to_docker(), docker_to_ws())
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+class TerminalResizeRequest(BaseModel):
+    exec_id: str
+    width: int
+    height: int
+
+@app.post("/terminal/resize")
+def terminal_resize(req: TerminalResizeRequest):
+    try:
+        return ds.resize_exec(req.exec_id, req.width, req.height)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 class ContainerControlRequest(BaseModel):
