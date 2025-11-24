@@ -250,18 +250,7 @@ def top_processes(id_or_name: str) -> dict:
     c = client.containers.get(id_or_name)
     return c.top()
 
-def start_exec_pty(id_or_name: str, cmd: Optional[List[str]] = None, env: Optional[Dict[str, str]] = None, cwd: Optional[str] = None) -> Dict[str, Any]:
-    client = get_client()
-    command = cmd or ["/bin/sh"]
-    created = client.api.exec_create(container=id_or_name, cmd=command, tty=True, stdin=True, environment=env, workdir=cwd)
-    exec_id = created.get("Id") if isinstance(created, dict) else created
-    sock = client.api.exec_start(exec_id, detach=False, tty=True, stream=False, socket=True)
-    return {"exec_id": exec_id, "socket": sock}
-
-def resize_exec(exec_id: str, width: int, height: int) -> Dict[str, Any]:
-    client = get_client()
-    client.api.exec_resize(exec_id, height=height, width=width)
-    return {"exec_id": exec_id, "width": int(width), "height": int(height)}
+ 
 
 
 def restart_container(id_or_name: str) -> dict:
