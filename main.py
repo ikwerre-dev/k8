@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request, WebSocket
+from fastapi.responses import HTMLResponse
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from typing import Optional, Dict
@@ -548,6 +549,110 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.websocket("/terminal/{id_or_name}")
+async def terminal_ws(id_or_name: str, websocket: WebSocket):
+    await websocket.accept()
+    cmd_q = websocket.query_params.get("cmd")
+    cwd_q = websocket.query_params.get("cwd")
+    try:
+        res = ds.start_exec_pty(id_or_name=id_or_name, cmd=(cmd_q.split() if cmd_q else None), env=None, cwd=cwd_q)
+        sock = res["socket"]
+        exec_id = res["exec_id"]
+        await websocket.send_json({"exec_id": exec_id})
+    except Exception as e:
+        await websocket.close(code=1011, reason=str(e))
+        return
+    import asyncio
+    async def ws_to_docker():
+        try:
+            while True:
+                try:
+                    t = await websocket.receive_text()
+                    sock.sendall(t.encode("utf-8"))
+                except Exception:
+                    try:
+                        b = await websocket.receive_bytes()
+                        sock.sendall(b)
+                    except Exception:
+                        break
+        except Exception:
+            pass
+    async def docker_to_ws():
+        try:
+            while True:
+                data = await asyncio.to_thread(sock.recv, 4096)
+                if not data:
+                    break
+                try:
+                    await websocket.send_text(data.decode("utf-8", errors="ignore"))
+                except Exception:
+                    break
+        except Exception:
+            pass
+    try:
+        await asyncio.gather(ws_to_docker(), docker_to_ws())
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+class TerminalResizeRequest(BaseModel):
+    exec_id: str
+    width: int
+    height: int
+
+@app.post("/terminal/resize")
+def terminal_resize(req: TerminalResizeRequest):
+    try:
+        return ds.resize_exec(req.exec_id, req.width, req.height)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/terminal/test")
+def terminal_test(id: str, cmd: Optional[str] = "/bin/bash"):
+    html = """
+<!doctype html>
+<html>
+<head>
+<meta charset=\"utf-8\" />
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
+<link rel=\"stylesheet\" href=\"https://unpkg.com/xterm@5.3.1/css/xterm.css\" />
+<style>
+html,body{height:100%;margin:0;padding:0;background:#111;color:#ddd;font-family:system-ui}
+#term{height:100vh}
+</style>
+</head>
+<body>
+<div id=\"term\"></div>
+<script src=\"https://unpkg.com/xterm@5.3.1/lib/xterm.js\"></script>
+<script>
+const id = {json_id};
+const cmd = {json_cmd};
+const ws = new WebSocket(`ws://${location.host}/terminal/${id}?cmd=${encodeURIComponent(cmd)}`);
+const term = new window.Terminal();
+term.open(document.getElementById('term'));
+let execId = null;
+ws.onmessage = (ev) => {
+  const d = ev.data;
+  if (typeof d === 'string' && d.startsWith('{')) {
+    try { const obj = JSON.parse(d); if (obj.exec_id) execId = obj.exec_id; } catch(e) {}
+    return;
+  }
+  term.write(typeof d === 'string' ? d : new TextDecoder().decode(d));
+};
+term.onData((data) => ws.send(data));
+window.addEventListener('resize', () => { if (execId) fetch('/terminal/resize', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ exec_id: execId, width: term.cols, height: term.rows }) }); });
+</script>
+</body>
+</html>
+""".replace("{json_id}", json.dumps(id)).replace("{json_cmd}", json.dumps(cmd))
+    return HTMLResponse(content=html)
 
 # --- Update app and container port ---
 class UpdatePortRequest(BaseModel):
