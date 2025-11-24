@@ -634,7 +634,8 @@ html,body{height:100%;margin:0;padding:0;background:#111;color:#ddd;font-family:
 <script>
 const id = {json_id};
 const cmd = {json_cmd};
-const ws = new WebSocket(`ws://${location.host}/terminal/${id}?cmd=${encodeURIComponent(cmd)}`);
+const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+const ws = new WebSocket(`${proto}://${location.host}/terminal/${id}?cmd=${encodeURIComponent(cmd)}`);
 const term = new window.Terminal();
 term.open(document.getElementById('term'));
 let execId = null;

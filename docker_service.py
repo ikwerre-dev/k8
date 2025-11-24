@@ -253,7 +253,7 @@ def top_processes(id_or_name: str) -> dict:
 def start_exec_pty(id_or_name: str, cmd: Optional[List[str]] = None, env: Optional[Dict[str, str]] = None, cwd: Optional[str] = None) -> Dict[str, Any]:
     client = get_client()
     command = cmd or ["/bin/sh"]
-    created = client.api.exec_create(container=id_or_name, cmd=command, tty=True, attach_stdin=True, environment=env, working_dir=cwd)
+    created = client.api.exec_create(container=id_or_name, cmd=command, tty=True, stdin=True, environment=env, working_dir=cwd)
     exec_id = created.get("Id") if isinstance(created, dict) else created
     sock = client.api.exec_start(exec_id, detach=False, tty=True, stream=False, socket=True)
     return {"exec_id": exec_id, "socket": sock}
@@ -2921,7 +2921,7 @@ def start_container(id_or_name: str) -> dict:
 def start_exec_pty(id_or_name: str, cmd: Optional[List[str]] = None, env: Optional[Dict[str, str]] = None, cwd: Optional[str] = None) -> Dict[str, Any]:
     client = get_client()
     command = cmd or ["/bin/sh"]
-    exec_id = client.api.exec_create(container=id_or_name, cmd=command, tty=True, attach_stdin=True, environment=env, working_dir=cwd)
+    exec_id = client.api.exec_create(container=id_or_name, cmd=command, tty=True, stdin=True, environment=env, working_dir=cwd)
     sock = client.api.exec_start(exec_id, detach=False, tty=True, stream=False, socket=True)
     return {"exec_id": exec_id, "socket": sock}
 

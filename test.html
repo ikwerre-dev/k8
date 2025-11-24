@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="stylesheet" href="https://unpkg.com/xterm@5.3.1/css/xterm.css" />
+<style>
+html,body{height:100%;margin:0;padding:0;background:#111;color:#ddd;font-family:system-ui}
+#term{height:100vh}
+</style>
+</head>
+<body>
+<div id="term"></div>
+<script src="https://unpkg.com/xterm@5.3.1/lib/xterm.js"></script>
+<script>
+const containerId = "b0869eb4e2f2";
+const cmd = "sh";
+const host = "193.180.215.44:8000";
+const proto = location.protocol === "https:" ? "wss" : "ws";
+const ws = new WebSocket(`${proto}://${host}/terminal/${containerId}?cmd=${encodeURIComponent(cmd)}`);
+const term = new window.Terminal();
+term.open(document.getElementById("term"));
+let execId = null;
+ws.onmessage = (ev) => {
+  const d = ev.data;
+  if (typeof d === "string" && d.startsWith("{")) {
+    try { const obj = JSON.parse(d); if (obj.exec_id) execId = obj.exec_id; } catch(e) {}
+    return;
+  }
+  term.write(typeof d === "string" ? d : new TextDecoder().decode(d));
+};
+term.onData((data) => ws.send(data));
+window.addEventListener("resize", () => {
+  if (execId) {
+    fetch(`https://${host}/terminal/resize`, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ exec_id: execId, width: term.cols, height: term.rows })
+    });
+  }
+});
+</script>
+</body>
+</html>
