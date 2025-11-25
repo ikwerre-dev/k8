@@ -1336,6 +1336,47 @@ def docker_container_status(req: ContainerControlRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/docker/container/logs-by-task/{task_id}")
+def docker_container_logs_by_task(task_id: str, tail: int = 200, timestamps: Optional[bool] = False):
+    try:
+        summary_path, builds_dir = _resolve_summary_path(task_id)
+        if not os.path.exists(summary_path):
+            try:
+                res = ds.container_logs(task_id, tail=int(tail or 200), timestamps=bool(timestamps))
+                return {
+                    "task_id": task_id,
+                    "container_id": res.get("id"),
+                    "container_name": res.get("name"),
+                    "tail": int(tail or 200),
+                    "timestamps": bool(timestamps),
+                    "logs": res.get("logs"),
+                    "lines": res.get("lines"),
+                }
+            except Exception:
+                raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
+        with open(summary_path, "r") as f:
+            summary_obj = json.load(f)
+        cid = summary_obj.get("container_name") or summary_obj.get("container_id")
+        if not cid:
+            upstream = (summary_obj.get("upstream", {}) or {})
+            cid = upstream.get("upstream_host")
+        if not cid:
+            raise HTTPException(status_code=404, detail="container_id not found in build.info.json")
+        res = ds.container_logs(cid, tail=int(tail or 200), timestamps=bool(timestamps))
+        return {
+            "task_id": task_id,
+            "container_id": res.get("id"),
+            "container_name": res.get("name"),
+            "tail": int(tail or 200),
+            "timestamps": bool(timestamps),
+            "logs": res.get("logs"),
+            "lines": res.get("lines"),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/docker/container/stop")
 def docker_container_stop(req: ContainerControlRequest):
     try:
