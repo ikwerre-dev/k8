@@ -13,9 +13,9 @@ html,body{height:100%;margin:0;padding:0;background:#111;color:#ddd;font-family:
 <div id="term"></div>
 <script src="https://unpkg.com/xterm@5.3.1/lib/xterm.js"></script>
 <script>
-const containerId = "b0869eb4e2f2";
+const containerId = "51e62b725033";
 const cmd = "sh";
-const host = "193.180.215.44:8000";
+const host = "localhost:8000";
 const proto = location.protocol === "https:" ? "wss" : "ws";
 const ws = new WebSocket(`${proto}://${host}/terminal/${containerId}?cmd=${encodeURIComponent(cmd)}`);
 const term = new window.Terminal();

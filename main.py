@@ -560,37 +560,146 @@ def terminal_test(id: str, cmd: Optional[str] = "/bin/bash"):
 <head>
 <meta charset=\"utf-8\" />
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
-<link rel=\"stylesheet\" href=\"https://unpkg.com/xterm@5.3.1/css/xterm.css\" />
 <style>
 html,body{height:100%;margin:0;padding:0;background:#111;color:#ddd;font-family:system-ui}
-#term{height:100vh}
+#term{height:80vh;overflow:auto;white-space:pre;outline:none;border:1px solid #333;padding:8px;font-family:monospace;cursor:text}
+#term:focus{border-color:#555}
+#bar{display:flex;gap:8px;align-items:center;padding:8px;border-top:1px solid #333}
+#bar input{flex:1;background:#111;color:#ddd;border:1px solid #333;padding:6px}
+#bar button{background:#222;color:#ddd;border:1px solid #333;padding:6px 10px;cursor:pointer}
+#status{padding:6px 8px;color:#aaa;font-size:12px}
 </style>
 </head>
 <body>
-<div id=\"term\"></div>
-<script src=\"https://unpkg.com/xterm@5.3.1/lib/xterm.js\"></script>
+<div id=\"status\">WS: connecting...</div>
+<div id=\"term\" tabindex=\"0\" contenteditable=\"true\"></div>
+<div id=\"bar\">
+  <input id=\"cmdInput\" type=\"text\" placeholder=\"Type a command (fallback)\" />
+  <button id=\"sendBtn\">Send</button>
+  <button id=\"enterBtn\">Enter</button>
+  <button id=\"clearBtn\">Clear Output</button>
+  <button id=\"focusBtn\">Focus Terminal</button>
+</div>
 <script>
-const id = {json_id};
-const cmd = {json_cmd};
+const params = new URLSearchParams(window.location.search);
+const id = params.get('id') || '';
+const cmd = params.get('cmd') || '/bin/bash';
 const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-const ws = new WebSocket(`${proto}://${location.host}/terminal/${id}?cmd=${encodeURIComponent(cmd)}`);
-const term = new window.Terminal();
-term.open(document.getElementById('term'));
+const url = proto + '://' + location.host + '/terminal/' + id + '?cmd=' + encodeURIComponent(cmd);
+let ws = null;
+const termEl = document.getElementById('term');
+const statusEl = document.getElementById('status');
+const cmdInput = document.getElementById('cmdInput');
+const sendBtn = document.getElementById('sendBtn');
+const enterBtn = document.getElementById('enterBtn');
+const clearBtn = document.getElementById('clearBtn');
+const focusBtn = document.getElementById('focusBtn');
+function appendText(t){ termEl.textContent += t; termEl.scrollTop = termEl.scrollHeight; }
+termEl.addEventListener('click', function(){ termEl.focus(); });
+termEl.focus();
 let execId = null;
-ws.onmessage = (ev) => {
-  const d = ev.data;
-  if (typeof d === 'string' && d.startsWith('{')) {
-    try { const obj = JSON.parse(d); if (obj.exec_id) execId = obj.exec_id; } catch(e) {}
-    return;
-  }
-  term.write(typeof d === 'string' ? d : new TextDecoder().decode(d));
-};
-term.onData((data) => ws.send(data));
-window.addEventListener('resize', () => { if (execId) fetch('/terminal/resize', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ exec_id: execId, width: term.cols, height: term.rows }) }); });
+function connect(){
+  ws = new WebSocket(url);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = function(){ statusEl.textContent = 'WS: connected'; termEl.focus(); cmdInput.focus(); };
+  ws.onmessage = function(ev){
+    const d = ev.data;
+    if (typeof d === 'string' && d.startsWith('{')) {
+      try { const obj = JSON.parse(d); if (obj.exec_id) execId = obj.exec_id; } catch(e) {}
+      return;
+    }
+    appendText(typeof d === 'string' ? d : new TextDecoder().decode(d));
+  };
+  ws.onclose = function(){ statusEl.textContent = 'WS: disconnected (reconnecting...)'; setTimeout(connect, 1000); };
+}
+connect();
+termEl.addEventListener('beforeinput', function(ev){
+  const t = ev.inputType;
+  if(t==='insertParagraph' || t==='insertLineBreak'){ ev.preventDefault(); appendText('\\n'); if(ws && ws.readyState===1){ ws.send('\\n'); } return; }
+  if(ev.data){ ev.preventDefault(); appendText(ev.data); if(ws && ws.readyState===1){ ws.send(ev.data); } }
+});
+termEl.addEventListener('keydown', function(ev){
+  if(ev.key==='Enter'){ ev.preventDefault(); appendText('\\n'); if(ws && ws.readyState===1){ ws.send('\\n'); } return; }
+  if(!ws || ws.readyState!==1) return;
+  if(ev.key==='Tab'){ ws.send('\\\\t'); ev.preventDefault(); return; }
+  if(ev.key==='Backspace'){ termEl.textContent = termEl.textContent.slice(0, -1); ws.send('\\\\u007f'); ev.preventDefault(); return; }
+  if(ev.key==='ArrowUp'){ ws.send('\\\\u001b[A'); ev.preventDefault(); return; }
+  if(ev.key==='ArrowDown'){ ws.send('\\\\u001b[B'); ev.preventDefault(); return; }
+  if(ev.key==='ArrowLeft'){ ws.send('\\\\u001b[D'); ev.preventDefault(); return; }
+  if(ev.key==='ArrowRight'){ ws.send('\\\\u001b[C'); ev.preventDefault(); return; }
+  if(ev.key.length===1){ appendText(ev.key); ws.send(ev.key); ev.preventDefault(); }
+});
+window.addEventListener('resize', function(){ if (execId) fetch('/terminal/resize', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ exec_id: execId, width: 120, height: 30 }) }); });
+sendBtn.addEventListener('click', function(){ if(ws && ws.readyState===1){ ws.send(cmdInput.value + '\\n'); cmdInput.value=''; } });
+cmdInput.addEventListener('keydown', function(ev){ if(ev.key==='Enter'){ ev.preventDefault(); if(ws && ws.readyState===1){ ws.send(cmdInput.value + '\\n'); cmdInput.value=''; } } });
+enterBtn.addEventListener('click', function(){ if(ws && ws.readyState===1){ ws.send('\\n'); } });
+clearBtn.addEventListener('click', function(){ termEl.textContent = ''; });
+focusBtn.addEventListener('click', function(){ termEl.focus(); });
 </script>
 </body>
 </html>
-""".replace("{json_id}", json.dumps(id)).replace("{json_cmd}", json.dumps(cmd))
+"""
+    return HTMLResponse(content=html)
+
+@app.get("/terminal/xterm")
+def terminal_xterm(id: str, cmd: Optional[str] = "/bin/bash"):
+    html = """
+<!doctype html>
+<html>
+<head>
+<meta charset=\"utf-8\" />
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
+<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/xterm@4.5.0/css/xterm.css\" />
+<style>
+html,body{height:100%;margin:0;padding:0;background:#111;color:#ddd;font-family:system-ui}
+#xterm{height:90vh;border:1px solid #333;margin:8px;outline:none;cursor:text}
+</style>
+</head>
+<body>
+<div id=\"xterm\" tabindex=\"0\"></div>
+<script src=\"https://cdn.jsdelivr.net/npm/xterm@4.5.0/lib/xterm.js\"></script>
+<script src=\"https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.3.0/lib/xterm-addon-fit.js\"></script>
+<script>
+var params = new URLSearchParams(window.location.search);
+var id = params.get('id') || '';
+var cmd = params.get('cmd') || '/bin/bash';
+var proto = location.protocol === 'https:' ? 'wss' : 'ws';
+var url = proto + '://' + location.host + '/terminal/' + id + '?cmd=' + encodeURIComponent(cmd);
+var container = document.getElementById('xterm');
+var term = new window.Terminal({ cursorBlink: true });
+var fit = new window.FitAddon.FitAddon();
+term.loadAddon(fit);
+term.open(container);
+fit.fit();
+var ws = null;
+var execId = null;
+function connect(){
+  ws = new WebSocket(url);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = function(){ term.focus(); try{ ws.send('\r'); }catch(e){} };
+  ws.onmessage = function(ev){
+    var d = ev.data;
+    if (typeof d === 'string' && d.indexOf('{') === 0) {
+      try { var obj = JSON.parse(d); if (obj.exec_id) execId = obj.exec_id; } catch(e) {}
+    } else {
+      term.write(typeof d === 'string' ? d : new TextDecoder().decode(d));
+    }
+  };
+  ws.onclose = function(){ setTimeout(connect, 1000); };
+}
+connect();
+term.onData(function(data){ if(ws && ws.readyState===1){ ws.send(data); } });
+container.addEventListener('click', function(){ term.focus(); });
+document.addEventListener('visibilitychange', function(){ if(!document.hidden){ term.focus(); } });
+setTimeout(function(){ term.focus(); }, 0);
+window.addEventListener('resize', function(){
+  fit.fit();
+  if (execId) fetch('/terminal/resize', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ exec_id: execId, width: term.cols, height: term.rows }) });
+});
+</script>
+</body>
+</html>
+"""
     return HTMLResponse(content=html)
 
 # --- Update app and container port ---
@@ -1024,8 +1133,15 @@ async def terminal_ws(id_or_name: str, websocket: WebSocket):
         sock = res["socket"]
         exec_id = res["exec_id"]
         await websocket.send_json({"exec_id": exec_id})
+        try:
+            sock.sendall(b"\n")
+        except Exception:
+            pass
     except Exception as e:
-        await websocket.close(code=1011, reason=str(e))
+        try:
+            await websocket.send_text(str(e))
+        except Exception:
+            pass
         return
     import asyncio
     async def ws_to_docker():
@@ -1063,10 +1179,7 @@ async def terminal_ws(id_or_name: str, websocket: WebSocket):
             sock.close()
         except Exception:
             pass
-        try:
-            await websocket.close()
-        except Exception:
-            pass
+        
 
 
 class TerminalResizeRequest(BaseModel):
