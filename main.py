@@ -1377,6 +1377,26 @@ def docker_container_logs_by_task(task_id: str, tail: int = 200, timestamps: Opt
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/docker/container/logs/{id_or_name}")
+def docker_container_logs(id_or_name: str, tail: int = 200, timestamps: Optional[bool] = False):
+    try:
+        res = ds.container_logs(id_or_name, tail=int(tail or 200), timestamps=bool(timestamps))
+        return {
+            "container_id": res.get("id"),
+            "container_name": res.get("name"),
+            "tail": int(tail or 200),
+            "timestamps": bool(timestamps),
+            "logs": res.get("logs"),
+            "lines": res.get("lines"),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        msg = str(e)
+        if "No such container" in msg or "not found" in msg.lower():
+            raise HTTPException(status_code=404, detail="container not found")
+        raise HTTPException(status_code=500, detail=msg)
+
 @app.post("/docker/container/stop")
 def docker_container_stop(req: ContainerControlRequest):
     try:
