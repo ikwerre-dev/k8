@@ -31,8 +31,8 @@ def get_log_endpoint() -> Optional[str]:
 
 def get_auth_header() -> Dict[str, str]:
     cfg = load_config()
-    # Optional: { "auth_header": {"Authorization": "Bearer <token>"} }
+    env_secret = os.environ.get("API_SECRET")
+    if env_secret:
+        return {"X-API-SECRET": env_secret}
     hdr = cfg.get("auth_header") or {}
-    if not isinstance(hdr, dict):
-        return {}
-    return hdr
+    return hdr if isinstance(hdr, dict) else {}

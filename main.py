@@ -1123,6 +1123,15 @@ async def log_requests(request: Request, call_next):
     print(f"[HTTP] {response.status_code} {request.method} {request.url.path}")
     return response
 
+@app.middleware("http")
+async def api_secret_auth(request: Request, call_next):
+    secret = os.environ.get("API_SECRET")
+    if secret:
+        incoming = request.headers.get("X-API-SECRET")
+        if incoming != secret:
+            raise HTTPException(status_code=401, detail="unauthorized")
+    return await call_next(request)
+
 @app.websocket("/terminal/{id_or_name}")
 async def terminal_ws(id_or_name: str, websocket: WebSocket):
     await websocket.accept()
