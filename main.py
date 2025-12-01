@@ -1359,6 +1359,25 @@ def docker_container_status(req: ContainerControlRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/docker/container/status/{idorname}")
+def docker_container_status_get(idorname: str):
+    try:
+        details = ds.inspect_container_details(idorname)
+        state = details.get("state") or {}
+        running = bool(state.get("Running"))
+        return {
+            "container": {
+                "id": details.get("id"),
+                "name": details.get("name"),
+                "running": running,
+                "state": state,
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/docker/container/logs-by-task/{task_id}")
 def docker_container_logs_by_task(task_id: str, tail: int = 200, timestamps: Optional[bool] = False):
     try:
