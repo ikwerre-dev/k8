@@ -29,6 +29,16 @@ def get_client() -> docker.DockerClient:
         raise RuntimeError(f"Failed to connect to Docker daemon: {e}")
 
 
+def _append_error_log(msg: str) -> None:
+    try:
+        p = os.path.join(os.path.dirname(__file__), "log.txt")
+        now = time.strftime('%Y-%m-%d %H:%M:%S')
+        with open(p, "a") as f:
+            f.write(f"[{now}] {msg}\n")
+    except Exception:
+        pass
+
+
 def login(username: str, password: str, registry: str = "https://index.docker.io/v1/") -> dict:
     client = get_client()
     res = client.login(username=username, password=password, registry=registry)
@@ -383,27 +393,91 @@ def run_container_extended(
     labels: Optional[Dict[str, str]] = None,
 ) -> dict:
     client = get_client()
-    container = client.containers.run(
-        image,
-        command,
-        name=name,
-        ports=ports,
-        environment=env,
-        volumes=volumes,
-        network=network,
-        mem_limit=mem_limit,
-        nano_cpus=nano_cpus,
-        cpu_shares=cpu_shares,
-        pids_limit=pids_limit,
-        cpuset_cpus=cpuset_cpus,
-        cpuset_mems=cpuset_mems,
-        memswap_limit=memswap_limit,
-        storage_opt=storage_opt,
-        detach=detach,
-        log_config=LogConfig(type=log_driver, config=log_options) if log_driver else None,
-        labels=labels,
-    )
-    return {"id": container.id, "name": name or container.name, "status": container.status}
+    try:
+        container = client.containers.run(
+            image,
+            command,
+            name=name,
+            ports=ports,
+            environment=env,
+            volumes=volumes,
+            network=network,
+            mem_limit=mem_limit,
+            nano_cpus=nano_cpus,
+            cpu_shares=cpu_shares,
+            pids_limit=pids_limit,
+            cpuset_cpus=cpuset_cpus,
+            cpuset_mems=cpuset_mems,
+            memswap_limit=memswap_limit,
+            storage_opt=storage_opt,
+            detach=detach,
+            log_config=LogConfig(type=log_driver, config=log_options) if log_driver else None,
+            labels=labels,
+        )
+        return {"id": container.id, "name": name or container.name, "status": container.status}
+    except docker.errors.APIError as e:
+        _append_error_log(f"docker run error {e}")
+        msg = str(e)
+        code = getattr(e, "status_code", None)
+        conflict = bool(code == 409 or ("Conflict" in msg and "already in use" in msg))
+        if conflict and name:
+            try:
+                existing = client.containers.get(name)
+                try:
+                    existing.remove(force=True)
+                    _append_error_log(f"removed existing container id={existing.id} name={name}")
+                except Exception as re:
+                    _append_error_log(f"remove existing container failed name={name} error={re}")
+                try:
+                    container = client.containers.run(
+                        image,
+                        command,
+                        name=name,
+                        ports=ports,
+                        environment=env,
+                        volumes=volumes,
+                        network=network,
+                        mem_limit=mem_limit,
+                        nano_cpus=nano_cpus,
+                        cpu_shares=cpu_shares,
+                        pids_limit=pids_limit,
+                        cpuset_cpus=cpuset_cpus,
+                        cpuset_mems=cpuset_mems,
+                        memswap_limit=memswap_limit,
+                        storage_opt=storage_opt,
+                        detach=detach,
+                        log_config=LogConfig(type=log_driver, config=log_options) if log_driver else None,
+                        labels=labels,
+                    )
+                    return {"id": container.id, "name": name or container.name, "status": container.status}
+                except docker.errors.APIError as e2:
+                    _append_error_log(f"docker run retry error {e2}")
+                    suffix = str(int(time.time()))
+                    new_name = f"{name}-{suffix}"
+                    container = client.containers.run(
+                        image,
+                        command,
+                        name=new_name,
+                        ports=ports,
+                        environment=env,
+                        volumes=volumes,
+                        network=network,
+                        mem_limit=mem_limit,
+                        nano_cpus=nano_cpus,
+                        cpu_shares=cpu_shares,
+                        pids_limit=pids_limit,
+                        cpuset_cpus=cpuset_cpus,
+                        cpuset_mems=cpuset_mems,
+                        memswap_limit=memswap_limit,
+                        storage_opt=storage_opt,
+                        detach=detach,
+                        log_config=LogConfig(type=log_driver, config=log_options) if log_driver else None,
+                        labels=labels,
+                    )
+                    return {"id": container.id, "name": new_name, "status": container.status}
+            except Exception as ge:
+                _append_error_log(f"conflict handling failed name={name} error={ge}")
+        raise
 
 
 def local_run_from_lz4(

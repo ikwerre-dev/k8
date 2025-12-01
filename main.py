@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from typing import Optional, Dict
 import os
+import time
 import threading
 import json
 import shutil
@@ -52,6 +53,15 @@ def _resolve_summary_path(task_id: str):
     builds_dir = os.path.join(base_dir, task_id)
     summary_path = os.path.join(builds_dir, "build.info.json")
     return summary_path, builds_dir
+
+def _append_error_log(msg: str):
+    try:
+        p = os.path.join(os.path.dirname(__file__), "log.txt")
+        now = time.strftime('%Y-%m-%d %H:%M:%S')
+        with open(p, "a") as f:
+            f.write(f"[{now}] {msg}\n")
+    except Exception:
+        pass
 
 class BuildRequest(BaseModel):
     path: str = "."
@@ -273,6 +283,10 @@ def docker_localrun(req: LocalRunRequest):
             pass
         return res
     except Exception as e:
+        try:
+            _append_error_log(f"docker_localrun error task_id={req.task_id} detail={e}")
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=str(e))
 
 class NginxSignDomainRequest(BaseModel):
