@@ -2128,6 +2128,8 @@ def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, e
         import tarfile
         import tempfile
         import shutil
+        import shutil as _shutil
+        import shlex
 
         _emit_log("Starting SSH rsync upload to remote server")
 
@@ -2166,8 +2168,8 @@ def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, e
         size_bytes = os.path.getsize(target_archive_path)
 
         remote_dir = f"/pxxl/uploads/{task_id}"
-        mkdir_cmd = f"ssh {ssh_target} 'mkdir -p {remote_dir}'"
-        rsync_cmd = f"rsync -avz -e 'ssh' {target_archive_path} {ssh_target}:{remote_dir}/"
+        mkdir_cmd = f"ssh {ssh_target} 'mkdir -p {shlex.quote(remote_dir)}'"
+        rsync_cmd = f"rsync -avz -e 'ssh' {shlex.quote(target_archive_path)} {ssh_target}:'{remote_dir}/'"
 
         _emit_log(f"pxxl transfer: upload url: {ssh_target}:{remote_dir}")
         _emit_log(f"pxxl transfer: rsync: {rsync_cmd}")
@@ -2177,7 +2179,8 @@ def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, e
 
         mk = subprocess.run(mkdir_cmd, shell=True, capture_output=True, text=True, timeout=60)
         if mk.returncode != 0:
-            err = mk.stderr or mk.stdout or "mkdir failed"
+            err = (mk.stderr or "") + ("\n" + mk.stdout if mk.stdout else "")
+            err = err.strip() or "mkdir failed"
             _emit_log(f"SSH mkdir failed: {err}", level="error")
             return {
                 "status": "error",
@@ -2186,6 +2189,36 @@ def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, e
                 "archive_path": target_archive_path,
                 "rsync": rsync_cmd,
             }
+
+        rsync_bin = _shutil.which("rsync")
+        if not rsync_bin:
+            scp_cmd = f"scp {shlex.quote(target_archive_path)} {ssh_target}:'{remote_dir}/'"
+            _emit_log("rsync not found; attempting scp fallback")
+            _emit_log(f"pxxl transfer: scp: {scp_cmd}")
+            print(f"pxxl transfer: scp {scp_cmd}")
+            scp = subprocess.run(scp_cmd, shell=True, capture_output=True, text=True, timeout=300)
+            if scp.returncode == 0:
+                _emit_log("SSH scp upload completed successfully")
+                return {
+                    "status": "success",
+                    "foldername": task_id,
+                    "files_transferred": 1,
+                    "total_size_bytes": size_bytes,
+                    "final_url": f"{ssh_target}:{remote_dir}",
+                    "archive_path": target_archive_path,
+                    "scp": scp_cmd,
+                }
+            else:
+                err = (scp.stderr or "") + ("\n" + scp.stdout if scp.stdout else "")
+                err = err.strip() or "scp failed"
+                _emit_log(f"SSH scp upload failed: {err}", level="error")
+                return {
+                    "status": "error",
+                    "error": err,
+                    "final_url": f"{ssh_target}:{remote_dir}",
+                    "archive_path": target_archive_path,
+                    "scp": scp_cmd,
+                }
 
         rs = subprocess.run(rsync_cmd, shell=True, capture_output=True, text=True, timeout=300)
         if rs.returncode == 0:
@@ -2200,7 +2233,8 @@ def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, e
                 "rsync": rsync_cmd,
             }
         else:
-            err = rs.stderr or rs.stdout or "rsync failed"
+            err = (rs.stderr or "") + ("\n" + rs.stdout if rs.stdout else "")
+            err = err.strip() or "rsync failed"
             _emit_log(f"SSH rsync upload failed: {err}", level="error")
             return {
                 "status": "error",
@@ -2797,7 +2831,13 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer failed")
                     _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer failed")
                     _append_line(error_log_path, "pxxl transfer: error during artifact transfer")
-                    _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "transfer_error", "stage": "uploading", "status": "error", "command": "pxxl launch transfer"})
+                    try:
+                        _append_line(error_log_path, str(upload_result.get("error") or ""))
+                        _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] transfer error detail: {str(upload_result.get('error') or '')}")
+                        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] transfer error detail: {str(upload_result.get('error') or '')}")
+                    except Exception:
+                        pass
+                    _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "transfer_error", "stage": "uploading", "status": "error", "command": "pxxl launch transfer", "error": upload_result.get("error")})
                     if emit:
                         try:
                             emit({
