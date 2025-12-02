@@ -2107,6 +2107,112 @@ def transfer_build_to_http(build_dir: str, task_id: str, upload_url: str, emit: 
         _emit_log(msg, level="error")
         return {"status": "error", "error": msg}
 
+def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None) -> Dict[str, Any]:
+    def _ts() -> str:
+        return time.strftime('%Y-%m-%dT%H:%M:%S')
+
+    def _emit_log(message: str, level: str = "info"):
+        if emit:
+            emit({
+                "task": "ssh_upload",
+                "task_id": task_id,
+                "stage": "uploading",
+                "status": "progress",
+                "message": message,
+                "level": level,
+                "app_id": app_id,
+                "ts": _ts(),
+            })
+
+    try:
+        import tarfile
+        import tempfile
+        import shutil
+
+        _emit_log("Starting SSH rsync upload to remote server")
+
+        tmp_dir = tempfile.mkdtemp(prefix=f"pxxl-{task_id}-")
+        tar_path = os.path.join(tmp_dir, f"{task_id}.tar")
+        with tarfile.open(tar_path, mode="w") as tf:
+            for item in os.listdir(build_dir):
+                full_path = os.path.join(build_dir, item)
+                tf.add(full_path, arcname=item)
+
+        lz4_path = f"{tar_path}.lz4"
+        try:
+            result = subprocess.run(["lz4", "-z", "-f", tar_path, lz4_path], capture_output=True, text=True, timeout=300)
+            if result.returncode != 0:
+                raise Exception(result.stderr or "lz4 compression failed")
+        except Exception as lz4_error:
+            import gzip
+            lz4_path = f"{tar_path}.gz"
+            with open(tar_path, "rb") as f_in:
+                with gzip.open(lz4_path, "wb") as f_out:
+                    f_out.writelines(f_in)
+            _emit_log(f"lz4 unavailable/failed, used gzip: {lz4_error}")
+
+        target_name = "upload.tar.lz4" if lz4_path.endswith(".lz4") else "upload.tar.gz"
+        target_archive_path = os.path.join(build_dir, target_name)
+        try:
+            if os.path.exists(target_archive_path):
+                try:
+                    os.remove(target_archive_path)
+                except Exception:
+                    pass
+            shutil.move(lz4_path, target_archive_path)
+        except Exception:
+            target_archive_path = lz4_path
+
+        size_bytes = os.path.getsize(target_archive_path)
+
+        remote_dir = f"/pxxl/uploads/{task_id}"
+        mkdir_cmd = f"ssh {ssh_target} 'mkdir -p {remote_dir}'"
+        rsync_cmd = f"rsync -avz -e 'ssh' {target_archive_path} {ssh_target}:{remote_dir}/"
+
+        _emit_log(f"pxxl transfer: upload url: {ssh_target}:{remote_dir}")
+        _emit_log(f"pxxl transfer: rsync: {rsync_cmd}")
+        print(f"pxxl transfer: upload url {ssh_target}:{remote_dir}")
+        print(f"pxxl transfer: rsync {rsync_cmd}")
+        _emit_log(f"Uploading archive ({size_bytes} bytes) to {ssh_target}:{remote_dir}")
+
+        mk = subprocess.run(mkdir_cmd, shell=True, capture_output=True, text=True, timeout=60)
+        if mk.returncode != 0:
+            err = mk.stderr or mk.stdout or "mkdir failed"
+            _emit_log(f"SSH mkdir failed: {err}", level="error")
+            return {
+                "status": "error",
+                "error": err,
+                "final_url": f"{ssh_target}:{remote_dir}",
+                "archive_path": target_archive_path,
+                "rsync": rsync_cmd,
+            }
+
+        rs = subprocess.run(rsync_cmd, shell=True, capture_output=True, text=True, timeout=300)
+        if rs.returncode == 0:
+            _emit_log("SSH rsync upload completed successfully")
+            return {
+                "status": "success",
+                "foldername": task_id,
+                "files_transferred": 1,
+                "total_size_bytes": size_bytes,
+                "final_url": f"{ssh_target}:{remote_dir}",
+                "archive_path": target_archive_path,
+                "rsync": rsync_cmd,
+            }
+        else:
+            err = rs.stderr or rs.stdout or "rsync failed"
+            _emit_log(f"SSH rsync upload failed: {err}", level="error")
+            return {
+                "status": "error",
+                "error": err,
+                "final_url": f"{ssh_target}:{remote_dir}",
+                "archive_path": target_archive_path,
+                "rsync": rsync_cmd,
+            }
+    except Exception as e:
+        msg = f"SSH rsync upload encountered an exception: {str(e)}"
+        _emit_log(msg, level="error")
+        return {"status": "error", "error": msg}
 def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile: Optional[str] = None, build_args: Optional[Dict[str, str]] = None, task_id: Optional[str] = None, override_log_endpoint: Optional[str] = None, dockerfile_content: Optional[str] = None, dockerfile_name: Optional[str] = None, cleanup: Optional[bool] = True, nocache: Optional[bool] = True, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None, upload_url: Optional[str] = None) -> dict:
     client = get_client()
     endpoint = override_log_endpoint or get_log_endpoint()
@@ -2634,13 +2740,22 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                     except Exception:
                         pass
 
-                upload_result = transfer_build_to_http(
-                    build_dir=task_logs_dir,
-                    task_id=task_id,
-                    upload_url=upload_url,
-                    emit=emit,
-                    app_id=app_id
-                ) 
+                if upload_url and ('@' in str(upload_url)) and (not str(upload_url).lower().startswith('http')):
+                    upload_result = transfer_build_to_rsync_ssh(
+                        build_dir=task_logs_dir,
+                        task_id=task_id,
+                        ssh_target=str(upload_url),
+                        emit=emit,
+                        app_id=app_id,
+                    )
+                else:
+                    upload_result = transfer_build_to_http(
+                        build_dir=task_logs_dir,
+                        task_id=task_id,
+                        upload_url=upload_url,
+                        emit=emit,
+                        app_id=app_id,
+                    ) 
                 
                 # remove accidental debug prints
                 
@@ -2654,6 +2769,10 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                         _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: curl {upload_result.get('curl')}")
                         _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: curl {upload_result.get('curl')}")
                         _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "transfer_curl", "stage": "uploading", "status": "progress", "curl": upload_result.get("curl")})
+                    if upload_result and upload_result.get("rsync"):
+                        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: rsync {upload_result.get('rsync')}")
+                        _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: rsync {upload_result.get('rsync')}")
+                        _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "transfer_rsync", "stage": "uploading", "status": "progress", "rsync": upload_result.get("rsync")})
                 except Exception:
                     pass
 
