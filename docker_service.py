@@ -2130,6 +2130,7 @@ def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, e
         import shutil
         import shutil as _shutil
         import shlex
+        import os
 
         _emit_log("Starting SSH rsync upload to remote server")
 
@@ -2168,8 +2169,18 @@ def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, e
         size_bytes = os.path.getsize(target_archive_path)
 
         remote_dir = f"/pxxl/uploads/{task_id}"
-        mkdir_cmd = f"ssh {ssh_target} 'mkdir -p {shlex.quote(remote_dir)}'"
-        rsync_cmd = f"rsync -avz -e 'ssh' {shlex.quote(target_archive_path)} {ssh_target}:'{remote_dir}/'"
+        identity_path = "/root/.ssh/id_ed25519"
+        ssh_opts_list = []
+        try:
+            if os.path.exists(identity_path):
+                ssh_opts_list.append(f"-i {shlex.quote(identity_path)}")
+                ssh_opts_list.append("-o IdentitiesOnly=yes")
+        except Exception:
+            pass
+        ssh_opts_list.append("-o StrictHostKeyChecking=no")
+        ssh_opts = " ".join(ssh_opts_list)
+        mkdir_cmd = f"ssh {ssh_opts} {ssh_target} 'mkdir -p {shlex.quote(remote_dir)}'"
+        rsync_cmd = f"rsync -avz -e 'ssh {ssh_opts}' {shlex.quote(target_archive_path)} {ssh_target}:'{remote_dir}/'"
 
         _emit_log(f"pxxl transfer: upload url: {ssh_target}:{remote_dir}")
         _emit_log(f"pxxl transfer: rsync: {rsync_cmd}")
@@ -2192,7 +2203,7 @@ def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, e
 
         rsync_bin = _shutil.which("rsync")
         if not rsync_bin:
-            scp_cmd = f"scp {shlex.quote(target_archive_path)} {ssh_target}:'{remote_dir}/'"
+            scp_cmd = f"scp {ssh_opts} {shlex.quote(target_archive_path)} {ssh_target}:'{remote_dir}/'"
             _emit_log("rsync not found; attempting scp fallback")
             _emit_log(f"pxxl transfer: scp: {scp_cmd}")
             print(f"pxxl transfer: scp {scp_cmd}")

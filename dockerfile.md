@@ -33,7 +33,7 @@ docker run -d \
   -v /pxxl/upload:/app/upload \
   -v /pxxl/builds:/app/builds \
   -v /pxxl/db:/app/db \
-  -v /root/.ssh/id_ed25519_build:/root/.ssh/id_ed25519:ro \
+  -v /root/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro \
   -v /var/run/docker.sock:/var/run/docker.sock \
   --name k8-container \
   k8-app
