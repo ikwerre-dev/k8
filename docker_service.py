@@ -2232,18 +2232,7 @@ def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, e
                 }
 
         rs = subprocess.run(rsync_cmd, shell=True, capture_output=True, text=True, timeout=300)
-        if rs.returncode == 0:
-            _emit_log("SSH rsync upload completed successfully")
-            return {
-                "status": "success",
-                "foldername": task_id,
-                "files_transferred": 1,
-                "total_size_bytes": size_bytes,
-                "final_url": f"{ssh_target}:{remote_dir}",
-                "archive_path": target_archive_path,
-                "rsync": rsync_cmd,
-            }
-        else:
+        if rs.returncode != 0:
             err = (rs.stderr or "") + ("\n" + rs.stdout if rs.stdout else "")
             err = err.strip() or "rsync failed"
             _emit_log(f"SSH rsync upload failed: {err}", level="error")
@@ -2254,6 +2243,67 @@ def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, e
                 "archive_path": target_archive_path,
                 "rsync": rsync_cmd,
             }
+
+        remote_archive = f"{remote_dir}/{os.path.basename(target_archive_path)}"
+        extracted_tar = f"{remote_dir}/extracted.tar"
+        if target_archive_path.endswith(".lz4"):
+            decompress_cmd = f"ssh {ssh_opts} {ssh_target} 'lz4 -d {extracted_tar.replace('\\', '\\\\').replace("'", "'\\''")} {extracted_tar.replace('\\', '\\\\').replace("'", "'\\''")} '"
+            decompress_cmd = f"ssh {ssh_opts} {ssh_target} 'lz4 -d {remote_archive} {extracted_tar}'"
+        else:
+            decompress_cmd = f"ssh {ssh_opts} {ssh_target} \"sh -c 'gzip -d -c {remote_archive} > {extracted_tar}'\""
+        tar_cmd = f"ssh {ssh_opts} {ssh_target} 'tar -xf {extracted_tar} -C {remote_dir}'"
+        cleanup_cmd = f"ssh {ssh_opts} {ssh_target} 'rm -f {extracted_tar} {remote_archive}'"
+
+        _emit_log(f"pxxl transfer: decompress: {decompress_cmd}")
+        _emit_log(f"pxxl transfer: extract: {tar_cmd}")
+        _emit_log(f"pxxl transfer: cleanup: {cleanup_cmd}")
+        print(f"pxxl transfer: decompress {decompress_cmd}")
+        print(f"pxxl transfer: extract {tar_cmd}")
+        print(f"pxxl transfer: cleanup {cleanup_cmd}")
+
+        dc = subprocess.run(decompress_cmd, shell=True, capture_output=True, text=True, timeout=300)
+        if dc.returncode != 0:
+            err = (dc.stderr or "") + ("\n" + dc.stdout if dc.stdout else "")
+            err = err.strip() or "decompress failed"
+            _emit_log(f"SSH decompress failed: {err}", level="error")
+            return {
+                "status": "error",
+                "error": err,
+                "final_url": f"{ssh_target}:{remote_dir}",
+                "archive_path": target_archive_path,
+                "rsync": rsync_cmd,
+            }
+
+        tx = subprocess.run(tar_cmd, shell=True, capture_output=True, text=True, timeout=300)
+        if tx.returncode != 0:
+            err = (tx.stderr or "") + ("\n" + tx.stdout if tx.stdout else "")
+            err = err.strip() or "extract failed"
+            _emit_log(f"SSH extract failed: {err}", level="error")
+            return {
+                "status": "error",
+                "error": err,
+                "final_url": f"{ssh_target}:{remote_dir}",
+                "archive_path": target_archive_path,
+                "rsync": rsync_cmd,
+            }
+
+        cl = subprocess.run(cleanup_cmd, shell=True, capture_output=True, text=True, timeout=120)
+        if cl.returncode != 0:
+            err = (cl.stderr or "") + ("\n" + cl.stdout if cl.stdout else "")
+            err = err.strip() or "cleanup failed"
+            _emit_log(f"SSH cleanup warning: {err}")
+
+        _emit_log("SSH rsync upload and remote unpack completed successfully")
+        return {
+            "status": "success",
+            "foldername": task_id,
+            "files_transferred": 1,
+            "total_size_bytes": size_bytes,
+            "final_url": f"{ssh_target}:{remote_dir}",
+            "archive_path": target_archive_path,
+            "rsync": rsync_cmd,
+            "remote_path": remote_dir,
+        }
     except Exception as e:
         msg = f"SSH rsync upload encountered an exception: {str(e)}"
         _emit_log(msg, level="error")
