@@ -94,9 +94,18 @@ def list_containers(all: bool = False) -> List[Dict[str, Any]]:
 
 def stop_container(id_or_name: str) -> Dict[str, Any]:
     client = get_client()
-    c = client.containers.get(id_or_name)
-    c.stop()
-    return {"id": c.id, "name": c.name, "status": c.status}
+    try:
+        c = client.containers.get(id_or_name)
+        try:
+            c.stop()
+        except Exception:
+            pass
+        return {"id": c.id, "name": c.name, "status": c.status}
+    except Exception as e:
+        msg = str(e)
+        if ("No such" in msg) or ("not found" in msg.lower()):
+            return {"id": None, "name": id_or_name, "status": "not_found"}
+        return {"id": None, "name": id_or_name, "status": "error", "error": msg}
 
 
 def remove_container(id_or_name: str, force: bool = False) -> Dict[str, Any]:
@@ -430,6 +439,19 @@ def run_container_extended(
             try:
                 existing = client.containers.get(name)
                 try:
+                    try:
+                        existing.reload()
+                    except Exception:
+                        pass
+                    try:
+                        st = client.api.inspect_container(existing.id).get("State", {})
+                        if bool(st.get("Running")):
+                            try:
+                                existing.stop()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
                     existing.remove(force=True)
                     _append_error_log(f"removed existing container id={existing.id} name={name}")
                 except Exception as re:
