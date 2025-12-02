@@ -102,8 +102,14 @@ def stop_container(id_or_name: str) -> Dict[str, Any]:
 def remove_container(id_or_name: str, force: bool = False) -> Dict[str, Any]:
     client = get_client()
     c = client.containers.get(id_or_name)
-    c.remove(force=force)
-    return {"removed": True, "id": c.id, "name": c.name}
+    try:
+        c.remove(force=force)
+        return {"removed": True, "id": c.id, "name": c.name}
+    except Exception as e:
+        msg = str(e)
+        if ("already in progress" in msg) or ("Conflict" in msg and "removal of container" in msg):
+            return {"removed": True, "id": c.id, "name": c.name, "status": "removal_in_progress"}
+        return {"removed": False, "id": c.id, "name": c.name, "error": msg}
 
 
 def list_images() -> List[Dict[str, Any]]:

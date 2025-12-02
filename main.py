@@ -482,8 +482,18 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
                 _append_line(events_log_path, f"removing old container {req.old_container}")
                 _append_build(build_log_path, f"removing old container {req.old_container}")
                 old_remove = ds.remove_container(req.old_container, force=True)
-                _append_line(events_log_path, f"removed old container {req.old_container}")
-                _append_build(build_log_path, f"removed old container {req.old_container}")
+                try:
+                    if isinstance(old_remove, dict) and old_remove.get("status") == "removal_in_progress":
+                        _append_line(events_log_path, f"removal in progress for {req.old_container}")
+                        _append_build(build_log_path, f"removal in progress for {req.old_container}")
+                    elif isinstance(old_remove, dict) and old_remove.get("removed"):
+                        _append_line(events_log_path, f"removed old container {req.old_container}")
+                        _append_build(build_log_path, f"removed old container {req.old_container}")
+                    else:
+                        _append_line(events_log_path, f"remove old container returned: {old_remove}")
+                        _append_build(build_log_path, f"remove old container returned: {old_remove}")
+                except Exception:
+                    pass
             except Exception as e:
                 old_remove = {"error": str(e)}
                 _append_line(events_log_path, f"remove old container error: {e}")
@@ -515,8 +525,18 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
                             _append_line(events_log_path, f"removing old container {old_cid}")
                             _append_build(build_log_path, f"removing old container {old_cid}")
                             old_remove = ds.remove_container(old_cid, force=True)
-                            _append_line(events_log_path, f"removed old container {old_cid}")
-                            _append_build(build_log_path, f"removed old container {old_cid}")
+                            try:
+                                if isinstance(old_remove, dict) and old_remove.get("status") == "removal_in_progress":
+                                    _append_line(events_log_path, f"removal in progress for {old_cid}")
+                                    _append_build(build_log_path, f"removal in progress for {old_cid}")
+                                elif isinstance(old_remove, dict) and old_remove.get("removed"):
+                                    _append_line(events_log_path, f"removed old container {old_cid}")
+                                    _append_build(build_log_path, f"removed old container {old_cid}")
+                                else:
+                                    _append_line(events_log_path, f"remove old container returned: {old_remove}")
+                                    _append_build(build_log_path, f"remove old container returned: {old_remove}")
+                            except Exception:
+                                pass
                         except Exception as e:
                             old_remove = {"error": str(e)}
                             _append_line(events_log_path, f"remove old container error: {e}")
