@@ -2168,7 +2168,7 @@ def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, e
 
         size_bytes = os.path.getsize(target_archive_path)
 
-        remote_dir = f"/pxxl/uploads/{task_id}"
+        remote_dir = f"/pxxl/upload/{task_id}"
         identity_path = "/root/.ssh/id_ed25519"
         ssh_opts_list = []
         try:
