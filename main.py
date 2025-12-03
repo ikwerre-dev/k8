@@ -471,13 +471,23 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
                 _append_line(events_log_path, f"stopping old container {req.old_container}")
                 _append_build(build_log_path, f"stopping old container {req.old_container}")
                 old_stop = ds.stop_container(req.old_container)
-                _append_line(events_log_path, f"stopped old container {req.old_container}")
-                _append_build(build_log_path, f"stopped old container {req.old_container}")
+                try:
+                    st = (old_stop or {})
+                    if st.get("status") == "not_found":
+                        _append_line(events_log_path, f"skip stop: container not found {req.old_container}")
+                        _append_build(build_log_path, f"skip stop: container not found {req.old_container}")
+                    elif st.get("status") == "error":
+                        _append_line(events_log_path, f"stop warning: {st.get('error')}")
+                        _append_build(build_log_path, f"stop warning: {st.get('error')}", level="error")
+                    else:
+                        _append_line(events_log_path, f"stopped old container {req.old_container}")
+                        _append_build(build_log_path, f"stopped old container {req.old_container}")
+                except Exception:
+                    pass
             except Exception as e:
                 old_stop = {"error": str(e)}
                 _append_line(events_log_path, f"stop old container error: {e}")
                 _append_build(build_log_path, f"stop old container error: {e}", level="error")
-                sign_error = True
             try:
                 _append_line(events_log_path, f"removing old container {req.old_container}")
                 _append_build(build_log_path, f"removing old container {req.old_container}")
@@ -498,7 +508,6 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
                 old_remove = {"error": str(e)}
                 _append_line(events_log_path, f"remove old container error: {e}")
                 _append_build(build_log_path, f"remove old container error: {e}", level="error")
-                sign_error = True
         elif req.old_task_id:
             try:
                 old_summary_path, old_builds_dir = _resolve_summary_path(req.old_task_id)
@@ -514,13 +523,23 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
                             _append_line(events_log_path, f"stopping old container {old_cid}")
                             _append_build(build_log_path, f"stopping old container {old_cid}")
                             old_stop = ds.stop_container(old_cid)
-                            _append_line(events_log_path, f"stopped old container {old_cid}")
-                            _append_build(build_log_path, f"stopped old container {old_cid}")
+                            try:
+                                st = (old_stop or {})
+                                if st.get("status") == "not_found":
+                                    _append_line(events_log_path, f"skip stop: container not found {old_cid}")
+                                    _append_build(build_log_path, f"skip stop: container not found {old_cid}")
+                                elif st.get("status") == "error":
+                                    _append_line(events_log_path, f"stop warning: {st.get('error')}")
+                                    _append_build(build_log_path, f"stop warning: {st.get('error')}", level="error")
+                                else:
+                                    _append_line(events_log_path, f"stopped old container {old_cid}")
+                                    _append_build(build_log_path, f"stopped old container {old_cid}")
+                            except Exception:
+                                pass
                         except Exception as e:
                             old_stop = {"error": str(e)}
                             _append_line(events_log_path, f"stop old container error: {e}")
                             _append_build(build_log_path, f"stop old container error: {e}", level="error")
-                            sign_error = True
                         try:
                             _append_line(events_log_path, f"removing old container {old_cid}")
                             _append_build(build_log_path, f"removing old container {old_cid}")
@@ -541,7 +560,6 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
                             old_remove = {"error": str(e)}
                             _append_line(events_log_path, f"remove old container error: {e}")
                             _append_build(build_log_path, f"remove old container error: {e}", level="error")
-                            sign_error = True
             except Exception as e:
                 old_stop = old_stop or {"error": str(e)}
                 old_remove = old_remove or {"error": str(e)}
@@ -552,7 +570,7 @@ def nginx_sign_domain(req: NginxSignDomainRequest):
             pass
         # After signing-related actions, finalize status: remain running until here
         try:
-            summary_obj.update({"status": ("error" if sign_error else "completed"), "stage": "signed"})
+            summary_obj.update({"status": "completed", "stage": "signed"})
             with open(summary_path, "w") as f:
                 json.dump(summary_obj, f, indent=2)
         except Exception:
