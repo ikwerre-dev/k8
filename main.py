@@ -30,7 +30,22 @@ async def lifespan(app: FastAPI):
             raise RuntimeError("database integrity check failed")
         conn.execute("SELECT COUNT(*) FROM applications")
         conn.execute("SELECT COUNT(*) FROM metrics")
+        try:
+            _tmp_sweeper_stop.clear()
+        except Exception:
+            pass
+        sweeper_thread = threading.Thread(target=_tmp_sweeper_worker, daemon=True)
+        sweeper_thread.start()
+        try:
+            app.state.tmp_sweeper_thread = sweeper_thread
+        except Exception:
+            pass
         yield
+        try:
+            _tmp_sweeper_stop.set()
+            sweeper_thread.join(timeout=2.0)
+        except Exception:
+            pass
     except Exception as e:
         raise RuntimeError(f"database startup failed: {e}")
 
@@ -53,6 +68,44 @@ def _resolve_summary_path(task_id: str):
     builds_dir = os.path.join(base_dir, task_id)
     summary_path = os.path.join(builds_dir, "build.info.json")
     return summary_path, builds_dir
+
+_tmp_sweeper_stop = threading.Event()
+
+def _tmp_sweeper_worker():
+    try:
+        while not _tmp_sweeper_stop.is_set():
+            try:
+                _sweep_tmp_docker_builds(20)
+            except Exception:
+                pass
+            for _ in range(60):
+                if _tmp_sweeper_stop.is_set():
+                    break
+                time.sleep(1)
+    except Exception:
+        pass
+
+def _sweep_tmp_docker_builds(max_age_minutes: int = 20):
+    try:
+        base = "/tmp/docker-builds"
+        now = time.time()
+        max_age = float(max_age_minutes or 20) * 60.0
+        if not os.path.isdir(base):
+            return
+        for name in os.listdir(base):
+            p = os.path.join(base, name)
+            try:
+                if not os.path.isdir(p):
+                    continue
+                m = os.path.getmtime(p)
+                c = os.path.getctime(p)
+                age = now - max(m, c)
+                if age > max_age:
+                    shutil.rmtree(p)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 def _append_error_log(msg: str):
     try:
@@ -867,6 +920,14 @@ def docker_build_start(req: BuildStartRequest):
             emit_event(task_id, ev)
         # Use a temp context so the inline Dockerfile writes in isolation
         tmp_dir = f"/tmp/docker-builds/{task_id}"
+        try:
+            os.makedirs(tmp_dir, exist_ok=True)
+        except Exception:
+            pass
+        try:
+            _sweep_tmp_docker_builds(20)
+        except Exception:
+            pass
         tag = req.tag or (f"{req.app_id}:latest" if req.app_id else None)
 
         def _runner():
@@ -889,6 +950,12 @@ def docker_build_start(req: BuildStartRequest):
                 set_completed(task_id, result)
             except Exception as e:
                 set_error(task_id, str(e))
+            finally:
+                try:
+                    if bool(req.cleanup):
+                        shutil.rmtree(tmp_dir)
+                except Exception:
+                    pass
 
         t = threading.Thread(target=_runner, daemon=True)
         t.start()
@@ -2159,15 +2226,27 @@ class BuildCleanupRequest(BaseModel):
 @app.post("/docker/build/cleanup")
 def docker_build_cleanup(req: BuildCleanupRequest):
     try:
-        # Cleanup build artifacts on build server after successful transfer
         builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
-        if not os.path.exists(builds_dir):
-            return {"task_id": req.task_id, "cleaned": False, "message": "build directory not found"}
+        tmp_dir = os.path.join("/tmp/docker-builds", req.task_id)
+        cleaned = False
+        cleaned_tmp = False
         try:
-            shutil.rmtree(builds_dir)
-            return {"task_id": req.task_id, "cleaned": True}
+            if os.path.exists(builds_dir):
+                shutil.rmtree(builds_dir)
+                cleaned = True
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
+        try:
+            if os.path.exists(tmp_dir):
+                shutil.rmtree(tmp_dir)
+                cleaned_tmp = True
+        except Exception:
+            pass
+        try:
+            _sweep_tmp_docker_builds(20)
+        except Exception:
+            pass
+        return {"task_id": req.task_id, "cleaned": cleaned, "tmp_cleaned": cleaned_tmp}
     except HTTPException:
         raise
     except Exception as e:
