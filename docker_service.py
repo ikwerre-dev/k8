@@ -2039,6 +2039,7 @@ def transfer_build_to_http(build_dir: str, task_id: str, upload_url: str, emit: 
                 "ts": _ts(),
             })
 
+    tmp_dir = None
     try:
         import tarfile
         import tempfile
@@ -2140,6 +2141,12 @@ def transfer_build_to_http(build_dir: str, task_id: str, upload_url: str, emit: 
         msg = f"HTTP upload encountered an exception: {str(e)}"
         _emit_log(msg, level="error")
         return {"status": "error", "error": msg}
+    finally:
+        try:
+            if tmp_dir and os.path.isdir(tmp_dir):
+                shutil.rmtree(tmp_dir)
+        except Exception:
+            pass
 
 def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None) -> Dict[str, Any]:
     def _ts() -> str:
@@ -2158,6 +2165,7 @@ def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, e
                 "ts": _ts(),
             })
 
+    tmp_dir = None
     try:
         import tarfile
         import tempfile
@@ -2342,6 +2350,12 @@ def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, e
         msg = f"SSH rsync upload encountered an exception: {str(e)}"
         _emit_log(msg, level="error")
         return {"status": "error", "error": msg}
+    finally:
+        try:
+            if tmp_dir and os.path.isdir(tmp_dir):
+                shutil.rmtree(tmp_dir)
+        except Exception:
+            pass
 def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile: Optional[str] = None, build_args: Optional[Dict[str, str]] = None, task_id: Optional[str] = None, override_log_endpoint: Optional[str] = None, dockerfile_content: Optional[str] = None, dockerfile_name: Optional[str] = None, cleanup: Optional[bool] = True, nocache: Optional[bool] = True, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None, upload_url: Optional[str] = None) -> dict:
     client = get_client()
     endpoint = override_log_endpoint or get_log_endpoint()
@@ -2909,6 +2923,15 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer completed successfully")
                     _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer completed successfully files={upload_result['files_transferred']} size_bytes={upload_result['total_size_bytes']}")
                     _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "transfer_completed", "stage": "uploading", "status": "completed", "files_transferred": upload_result["files_transferred"], "total_size_bytes": upload_result["total_size_bytes"], "command": "pxxl launch transfer"})
+                    try:
+                        ap = upload_result.get("archive_path")
+                        if ap and os.path.exists(ap):
+                            os.remove(ap)
+                            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: removed local archive {ap}")
+                            _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: removed local archive {ap}")
+                            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "transfer_cleanup_local_archive", "removed": ap})
+                    except Exception:
+                        pass
                     if emit:
                         try:
                             emit({
@@ -2930,6 +2953,15 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                         _append_line(error_log_path, str(upload_result.get("error") or ""))
                         _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] transfer error detail: {str(upload_result.get('error') or '')}")
                         _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] transfer error detail: {str(upload_result.get('error') or '')}")
+                    except Exception:
+                        pass
+                    try:
+                        ap = upload_result.get("archive_path")
+                        if ap and os.path.exists(ap):
+                            os.remove(ap)
+                            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] transfer error: removed local archive {ap}")
+                            _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] transfer error: removed local archive {ap}")
+                            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "transfer_cleanup_local_archive", "removed": ap})
                     except Exception:
                         pass
                     _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "transfer_error", "stage": "uploading", "status": "error", "command": "pxxl launch transfer", "error": upload_result.get("error")})
