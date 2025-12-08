@@ -1036,7 +1036,8 @@ def pipeline_html_site(req: HtmlSitePipelineRequest):
 def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
     try:
         import json
-        from task_registry import get
+        from task_registry import get, set_error
+        import db_service as db
         
         # Get task registry info
         t = get(task_id)
@@ -1210,6 +1211,51 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
                     # Do not surface sensitive SFTP params in API response
                 except Exception:
                     pass
+                # Upsert project record
+                try:
+                    app_id_val = summary_obj.get("app_id")
+                    container_id_val = summary_obj.get("container_id") or summary_obj.get("container_name")
+                    if app_id_val:
+                        db.upsert_application(str(app_id_val), container_id_val)
+                except Exception:
+                    pass
+            else:
+                # Attempt to derive app_id from task events and upsert
+                try:
+                    evs = (t.get("events") or []) if isinstance(t, dict) else []
+                    app_id_val = None
+                    for ev in evs:
+                        if isinstance(ev, dict) and ev.get("app_id"):
+                            app_id_val = ev.get("app_id")
+                            break
+                    if app_id_val:
+                        db.upsert_application(str(app_id_val), None)
+                except Exception:
+                    pass
+
+            # Enforce build state and auto-fail when not active
+            try:
+                still_building = False
+                summary_status = (summary_obj or {}).get("status") if summary_obj else None
+                summary_stage = (summary_obj or {}).get("stage") if summary_obj else None
+                if str(status).lower() == "running":
+                    still_building = True
+                if summary_status in ("running", "building"):
+                    still_building = True
+                if summary_stage in ("building", "uploading"):
+                    still_building = True
+                tmp_dir = os.path.join("/tmp/docker-builds", task_id)
+                if os.path.isdir(tmp_dir):
+                    still_building = True
+                if not still_building:
+                    try:
+                        set_error(task_id, "build not active; deployment failed")
+                        build_info["status"] = "failed"
+                        build_info["failed_reason"] = "build not active"
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             
             # Load parsed Dockerfile metadata
             parsed_dockerfile_path = os.path.join(builds_dir, "dockerfile.parsed.json")
@@ -1229,8 +1275,52 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
 @app.get("/tasks/status/{task_id}")
 def tasks_status(task_id: str):
     try:
-        from task_registry import get
-        return get(task_id)
+        from task_registry import get, set_error
+        import db_service as db
+        import json
+        t = get(task_id)
+        summary_path, builds_dir = _resolve_summary_path(task_id)
+        summary_obj = None
+        try:
+            if os.path.exists(summary_path):
+                with open(summary_path, "r") as f:
+                    summary_obj = json.load(f)
+        except Exception:
+            summary_obj = None
+        try:
+            if summary_obj and summary_obj.get("app_id"):
+                db.upsert_application(str(summary_obj.get("app_id")), summary_obj.get("container_id") or summary_obj.get("container_name"))
+            else:
+                evs = (t.get("events") or []) if isinstance(t, dict) else []
+                app_id_val = None
+                for ev in evs:
+                    if isinstance(ev, dict) and ev.get("app_id"):
+                        app_id_val = ev.get("app_id")
+                        break
+                if app_id_val:
+                    db.upsert_application(str(app_id_val), None)
+        except Exception:
+            pass
+        try:
+            still_building = False
+            status_val = t.get("status") if isinstance(t, dict) else None
+            if str(status_val).lower() == "running":
+                still_building = True
+            if summary_obj:
+                if summary_obj.get("status") in ("running", "building"):
+                    still_building = True
+                if summary_obj.get("stage") in ("building", "uploading"):
+                    still_building = True
+            if os.path.isdir(os.path.join("/tmp/docker-builds", task_id)):
+                still_building = True
+            if not still_building:
+                try:
+                    set_error(task_id, "build not active; deployment failed")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return t
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
