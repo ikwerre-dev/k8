@@ -2526,8 +2526,8 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             tag=tag,
             dockerfile=df_arg,
             buildargs=build_args or {},
-            rm=True,
-            forcerm=True,
+            rm=False,
+            forcerm=False,
             decode=True,
             nocache=bool(nocache),
         )

@@ -97,6 +97,13 @@ def _sweep_tmp_docker_builds(max_age_minutes: int = 20):
             try:
                 if not os.path.isdir(p):
                     continue
+                try:
+                    from task_registry import get as _get_task
+                    t = _get_task(name)
+                    if isinstance(t, dict) and str(t.get("status")).lower() == "running":
+                        continue
+                except Exception:
+                    pass
                 m = os.path.getmtime(p)
                 c = os.path.getctime(p)
                 age = now - max(m, c)
