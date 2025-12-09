@@ -1038,10 +1038,14 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
         import json
         from task_registry import get, set_error
         import db_service as db
+        import time
         
         # Get task registry info
         t = get(task_id)
         status = t.get("status") if isinstance(t, dict) else "unknown"
+        created_at = t.get("created_at") if isinstance(t, dict) else None
+        now_ts = time.time()
+        age_sec = (now_ts - float(created_at)) if created_at else 0.0
         
         # Resolve base directory based on server param
         base_dir = None
@@ -1233,7 +1237,7 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
                 except Exception:
                     pass
 
-            # Enforce build state and auto-fail when not active
+            # Enforce build state and auto-fail when not active, with startup grace
             try:
                 still_building = False
                 summary_status = (summary_obj or {}).get("status") if summary_obj else None
@@ -1247,7 +1251,8 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
                 tmp_dir = os.path.join("/tmp/docker-builds", task_id)
                 if os.path.isdir(tmp_dir):
                     still_building = True
-                if not still_building:
+                # Grace window: do not fail within first 60s of task creation
+                if (not still_building) and (age_sec > 60.0):
                     try:
                         set_error(task_id, "build not active; deployment failed")
                         build_info["status"] = "failed"
@@ -1268,9 +1273,21 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
         else:
             build_info["error"] = f"logs directory not found: {builds_dir}"
             try:
-                set_error(task_id, "logs directory not found")
-                build_info["status"] = "failed"
-                build_info["failed_reason"] = "logs directory not found"
+                # Check alternate summary paths and tmp builder indicator
+                summary_path, _bd = _resolve_summary_path(task_id)
+                tmp_dir = os.path.join("/tmp/docker-builds", task_id)
+                summary_exists = os.path.exists(summary_path)
+                tmp_exists = os.path.isdir(tmp_dir)
+                # Only fail if clearly inactive and past grace window
+                if (str(status).lower() != "running") and (not summary_exists) and (not tmp_exists) and (age_sec > 60.0):
+                    set_error(task_id, "logs directory not found")
+                    build_info["status"] = "failed"
+                    build_info["failed_reason"] = "logs directory not found"
+                else:
+                    # Reflect starting state if within grace
+                    if str(status).lower() == "running" or tmp_exists or (age_sec <= 60.0):
+                        build_info["status"] = build_info.get("status") or "running"
+                        build_info["stage"] = build_info.get("stage") or "building"
             except Exception:
                 pass
         
@@ -1284,6 +1301,7 @@ def tasks_status(task_id: str):
         from task_registry import get, set_error
         import db_service as db
         import json
+        import time
         t = get(task_id)
         summary_path, builds_dir = _resolve_summary_path(task_id)
         summary_obj = None
@@ -1310,6 +1328,8 @@ def tasks_status(task_id: str):
         try:
             still_building = False
             status_val = t.get("status") if isinstance(t, dict) else None
+            created_at = t.get("created_at") if isinstance(t, dict) else None
+            age_sec = (time.time() - float(created_at)) if created_at else 0.0
             if str(status_val).lower() == "running":
                 still_building = True
             if summary_obj:
@@ -1319,7 +1339,7 @@ def tasks_status(task_id: str):
                     still_building = True
             if os.path.isdir(os.path.join("/tmp/docker-builds", task_id)):
                 still_building = True
-            if not still_building:
+            if (not still_building) and (age_sec > 60.0):
                 try:
                     set_error(task_id, "build not active; deployment failed")
                 except Exception:
