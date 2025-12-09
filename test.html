@@ -29,6 +29,7 @@ ws.onmessage = (ev) => {
   }
   term.write(typeof d === "string" ? d : new TextDecoder().decode(d));
 };
+
 term.onData((data) => ws.send(data));
 window.addEventListener("resize", () => {
   if (execId) {

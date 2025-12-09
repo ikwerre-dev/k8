@@ -1267,6 +1267,12 @@ def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
                     pass
         else:
             build_info["error"] = f"logs directory not found: {builds_dir}"
+            try:
+                set_error(task_id, "logs directory not found")
+                build_info["status"] = "failed"
+                build_info["failed_reason"] = "logs directory not found"
+            except Exception:
+                pass
         
         return build_info
     except Exception as e:
