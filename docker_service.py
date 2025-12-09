@@ -2361,6 +2361,10 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
     endpoint = override_log_endpoint or get_log_endpoint()
     headers = get_auth_header()
     logs_collected: List[Dict[str, Any]] = []
+    try:
+        os.environ["DOCKER_BUILDKIT"] = "1"
+    except Exception:
+        pass
 
     # Prepare on-disk logging paths per task_id
     base_logs_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "builds"))
@@ -2530,6 +2534,7 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             forcerm=False,
             decode=True,
             nocache=bool(nocache),
+            pull=True,
         )
         step_count = 0
         build_failed = False
@@ -2729,6 +2734,54 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] build failed error {build_failure_msg} app_id={app_id or ''}")
             _append_line(error_log_path, build_failure_msg or "build failed")
             _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "build_failed", "message": build_failure_msg})
+            try:
+                if build_failure_msg and ("unknown parent image ID" in build_failure_msg or "failed to set parent" in build_failure_msg):
+                    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] fallback buildx attempting")
+                    _append_json(build_structured_path, {"ts": _ts(), "level": "warn", "event": "fallback_attempt_buildx"})
+                    try:
+                        import subprocess
+                        cmd = [
+                            "docker", "buildx", "build", "--load",
+                            "-t", str(tag or ""),
+                            "-f", str(df_arg or "Dockerfile"),
+                        ]
+                        if bool(nocache):
+                            cmd.append("--no-cache")
+                        cmd.append(str(context_path))
+                        res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                        try:
+                            if res.stdout:
+                                for ln in res.stdout.splitlines():
+                                    _append_line(build_log_path, ln)
+                                    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "buildx_stdout", "text": ln})
+                            if res.stderr:
+                                for ln in res.stderr.splitlines():
+                                    _append_line(build_log_path, ln)
+                                    _append_json(build_structured_path, {"ts": _ts(), "level": "warn", "event": "buildx_stderr", "text": ln})
+                        except Exception:
+                            pass
+                        if res.returncode == 0:
+                            try:
+                                if tag:
+                                    try:
+                                        img = client.images.get(tag)
+                                        image_id = img.id
+                                    except Exception:
+                                        image_id = image_id or None
+                                build_failed = False
+                                build_failure_msg = None
+                                _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] fallback buildx succeeded")
+                                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "fallback_buildx_succeeded", "tag": tag})
+                            except Exception:
+                                pass
+                        else:
+                            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] fallback buildx failed rc={res.returncode}")
+                            _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "fallback_buildx_failed", "rc": res.returncode})
+                    except Exception as fb_err:
+                        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] fallback buildx exception {fb_err}")
+                        _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "fallback_buildx_exception", "error": str(fb_err)})
+            except Exception:
+                pass
             # Write failure summary immediately for consumers
             try:
                 if summary_path:
