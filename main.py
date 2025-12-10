@@ -1489,12 +1489,12 @@ def docker_container_logs_by_task(task_id: str, tail: int = 2000, timestamps: Op
         summary_path, builds_dir = _resolve_summary_path(task_id)
         if not os.path.exists(summary_path):
             try:
-                res = ds.container_logs(task_id, tail=int(tail or 200), timestamps=bool(timestamps))
+                res = ds.container_logs(task_id, tail=int(tail or 20000), timestamps=bool(timestamps))
                 return {
                     "task_id": task_id,
                     "container_id": res.get("id"),
                     "container_name": res.get("name"),
-                    "tail": int(tail or 200),
+                    "tail": int(tail or 20000),
                     "timestamps": bool(timestamps),
                     "logs": res.get("logs"),
                     "lines": res.get("lines"),
