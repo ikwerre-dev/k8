@@ -1033,7 +1033,7 @@ def pipeline_html_site(req: HtmlSitePipelineRequest):
 
 
 @app.get("/tasks/logs/{task_id}")
-def tasks_logs(task_id: str, tail: int = 200, server: Optional[str] = None):
+def tasks_logs(task_id: str, tail: int = 20000, server: Optional[str] = None):
     try:
         import json
         from task_registry import get
@@ -1484,7 +1484,7 @@ def docker_container_status_get(idorname: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/docker/container/logs-by-task/{task_id}")
-def docker_container_logs_by_task(task_id: str, tail: int = 200, timestamps: Optional[bool] = False):
+def docker_container_logs_by_task(task_id: str, tail: int = 2000, timestamps: Optional[bool] = False):
     try:
         summary_path, builds_dir = _resolve_summary_path(task_id)
         if not os.path.exists(summary_path):
@@ -1525,7 +1525,7 @@ def docker_container_logs_by_task(task_id: str, tail: int = 200, timestamps: Opt
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/docker/container/logs/{id_or_name}")
-def docker_container_logs(id_or_name: str, tail: int = 200, timestamps: Optional[bool] = False):
+def docker_container_logs(id_or_name: str, tail: int = 2000, timestamps: Optional[bool] = False):
     try:
         res = ds.container_logs(id_or_name, tail=int(tail or 200), timestamps=bool(timestamps))
         return {
