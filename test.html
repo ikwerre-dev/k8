@@ -1,44 +1,183 @@
-<!doctype html>
-<html>
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<link rel="stylesheet" href="https://unpkg.com/xterm@5.3.1/css/xterm.css" />
-<style>
-html,body{height:100%;margin:0;padding:0;background:#111;color:#ddd;font-family:system-ui}
-#term{height:100vh}
-</style>
-</head>
-<body>
-<div id="term"></div>
-<script src="https://unpkg.com/xterm@5.3.1/lib/xterm.js"></script>
-<script>
-const containerId = "51e62b725033";
-const cmd = "sh";
-const host = "localhost:8000";
-const proto = location.protocol === "https:" ? "wss" : "ws";
-const ws = new WebSocket(`${proto}://${host}/terminal/${containerId}?cmd=${encodeURIComponent(cmd)}`);
-const term = new window.Terminal();
-term.open(document.getElementById("term"));
-let execId = null;
-ws.onmessage = (ev) => {
-  const d = ev.data;
-  if (typeof d === "string" && d.startsWith("{")) {
-    try { const obj = JSON.parse(d); if (obj.exec_id) execId = obj.exec_id; } catch(e) {}
-    return;
-  }
-  term.write(typeof d === "string" ? d : new TextDecoder().decode(d));
-};
-term.onData((data) => ws.send(data));
-window.addEventListener("resize", () => {
-  if (execId) {
-    fetch(`https://${host}/terminal/resize`, {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({ exec_id: execId, width: term.cols, height: term.rows })
-    });
-  }
-});
-</script>
-</body>
-</html>
+# Builder stage
+FROM node:24-alpine AS builder
+
+WORKDIR /app
+
+
+RUN echo "phase - 1 point - hint(setting up container environment)" &&     apk add --no-cache     git     openssl     openssh     jq     curl     bash     dos2unix     tzdata     python3     make     g++     linux-headers     libc-dev     libusb-dev     eudev-dev     autoconf     automake     pkgconfig     cairo-dev     pango-dev     jpeg-dev     giflib-dev     pixman-dev     pangomm-dev     libjpeg-turbo-dev     && cp /usr/share/zoneinfo/UTC /etc/localtime && echo "UTC" > /etc/timezone
+
+
+ENV TZ=UTC
+
+RUN  echo "phase - 2 point - hint(cloning github repo)" &&  mkdir -p /pxxl &&   echo "5117b629-1612-416a-b482-1f9b0698ace0cmbteytou00011owr1z8boebn" > /pxxl/key.txt &&   ENC=$(curl -s "https://gateway.pxxl.dev/api/v1/user/projects/5117b629-1612-416a-b482-1f9b0698ace0/github/clone") &&   if echo "$ENC" | grep -q ":"; then     SECRET=$(cat /pxxl/key.txt) &&     KEY_HEX=$(printf '%s' "$SECRET" | openssl dgst -sha256 -binary | xxd -p | tr -d '\n' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]') &&     IV=$(printf '%s' "$ENC" | cut -d':' -f1 | tr -d '\r\n' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]') &&     CIPH=$(printf '%s' "$ENC" | cut -d':' -f2- | tr -d '\r\n' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]') &&     if ! printf '%s' "$KEY_HEX" | grep -Eq '^[0-9a-f]{64}$'; then echo "error: bad KEY_HEX length or non-hex characters" >&2; exit 1; fi &&     if ! printf '%s' "$IV" | grep -Eq '^[0-9a-f]{32}$'; then echo "error: Unable to Decrypt Github Credentials, Please contact support" >&2; exit 1; fi &&     if ! printf '%s' "$CIPH" | grep -Eq '^[0-9a-f]+'; then echo "error: ciphertext contains non-hex characters or is empty" >&2; exit 1; fi &&     printf '%s' "$CIPH" | xxd -r -p | openssl enc -aes-256-cbc -d -K "$KEY_HEX" -iv "$IV" | sh;   else     printf '%s' "$ENC" | sh;   fi
+
+RUN mkdir -p /pxxl &&   echo "5117b629-1612-416a-b482-1f9b0698ace0cmbteytou00011owr1z8boebn" > /pxxl/key.txt &&   ENC=$(curl -s "https://gateway.pxxl.dev/api/v1/user/projects/5117b629-1612-416a-b482-1f9b0698ace0/env/public") &&   if echo "$ENC" | grep -q ":"; then     SECRET=$(cat /pxxl/key.txt) &&     KEY_HEX=$(printf '%s' "$SECRET" | openssl dgst -sha256 -binary | xxd -p | tr -d '\n' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]') &&     IV=$(printf '%s' "$ENC" | cut -d':' -f1 | tr -d '\r\n' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]') &&     CIPH=$(printf '%s' "$ENC" | cut -d':' -f2- | tr -d '\r\n' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]') &&     if ! printf '%s' "$KEY_HEX" | grep -Eq '^[0-9a-f]{64}$'; then echo "error: Unable to Decrpyt ENV, Please contact support" >&2; exit 1; fi &&     if ! printf '%s' "$IV" | grep -Eq '^[0-9a-f]{32}$'; then echo "error: bad IV length or non-hex characters" >&2; exit 1; fi &&     if ! printf '%s' "$CIPH" | grep -Eq '^[0-9a-f]+'; then echo "error: ciphertext contains non-hex characters or is empty" >&2; exit 1; fi &&     printf '%s' "$CIPH" | xxd -r -p | openssl enc -aes-256-cbc -d -K "$KEY_HEX" -iv "$IV" | sh;   else     printf '%s' "$ENC" | sh;   fi
+
+
+RUN cd /app && if [ -f next.config.ts ]; then \
+  echo "Found next.config.ts, checking content..."; \
+  echo "=== Original next.config.ts content ==="; \
+  cat next.config.ts || echo "File is empty or unreadable"; \
+  echo "=== End of original content ==="; \
+  cp next.config.ts next.config.ts.backup; \
+  if [ ! -s next.config.ts ] || ! grep -q "nextConfig" next.config.ts; then \
+    echo "File is empty or has no nextConfig, creating new content..."; \
+    echo "import type { NextConfig } from 'next'" > next.config.ts; \
+    echo "" >> next.config.ts; \
+    echo "const nextConfig: NextConfig = {" >> next.config.ts; \
+    echo "  typescript: { ignoreBuildErrors: true }," >> next.config.ts; \
+    echo "  eslint: { ignoreDuringBuilds: true }" >> next.config.ts; \
+    echo "};" >> next.config.ts; \
+    echo "" >> next.config.ts; \
+    echo "export default nextConfig" >> next.config.ts; \
+  else \
+    echo "File has content, modifying existing config..."; \
+    if ! grep -q "typescript.*ignoreBuildErrors" next.config.ts; then \
+      sed -i '/const nextConfig.*{/a\  typescript: { ignoreBuildErrors: true },' next.config.ts; \
+    fi; \
+    if ! grep -q "eslint.*ignoreDuringBuilds" next.config.ts; then \
+      sed -i '/const nextConfig.*{/a\  eslint: { ignoreDuringBuilds: true },' next.config.ts; \
+    fi; \
+    sed -i 's/ignoreBuildErrors:.*false/ignoreBuildErrors: true/g' next.config.ts; \
+    sed -i 's/ignoreDuringBuilds:.*false/ignoreDuringBuilds: true/g' next.config.ts; \
+  fi; \
+  echo "=== Modified next.config.ts content ==="; \
+  cat next.config.ts; \
+  echo "=== End of modified content ==="; \
+elif [ -f next.config.js ]; then \
+  echo "Found next.config.js, checking content..."; \
+  echo "=== Original next.config.js content ==="; \
+  cat next.config.js || echo "File is empty or unreadable"; \
+  echo "=== End of original content ==="; \
+  cp next.config.js next.config.js.backup; \
+  if [ ! -s next.config.js ] || ! grep -q "module.exports\|nextConfig" next.config.js; then \
+    echo "File is empty or has no config, creating new content..."; \
+    echo "/** @type {import('next').NextConfig} */" > next.config.js; \
+    echo "const nextConfig = {" >> next.config.js; \
+    echo "  typescript: { ignoreBuildErrors: true }," >> next.config.js; \
+    echo "  eslint: { ignoreDuringBuilds: true }" >> next.config.js; \
+    echo "};" >> next.config.js; \
+    echo "" >> next.config.js; \
+    echo "module.exports = nextConfig;" >> next.config.js; \
+  else \
+    echo "File has content, modifying existing config..."; \
+    if ! grep -q "typescript.*ignoreBuildErrors" next.config.js; then \
+      sed -i '/module.exports.*{/a\  typescript: { ignoreBuildErrors: true },' next.config.js; \
+    fi; \
+    if ! grep -q "eslint.*ignoreDuringBuilds" next.config.js; then \
+      sed -i '/module.exports.*{/a\  eslint: { ignoreDuringBuilds: true },' next.config.js; \
+    fi; \
+    sed -i 's/ignoreBuildErrors:.*false/ignoreBuildErrors: true/g' next.config.js; \
+    sed -i 's/ignoreDuringBuilds:.*false/ignoreDuringBuilds: true/g' next.config.js; \
+  fi; \
+  echo "=== Modified next.config.js content ==="; \
+  cat next.config.js; \
+  echo "=== End of modified content ==="; \
+elif [ -f next.config.mjs ]; then \
+  echo "Found next.config.mjs, checking content..."; \
+  echo "=== Original next.config.mjs content ==="; \
+  cat next.config.mjs || echo "File is empty or unreadable"; \
+  echo "=== End of original content ==="; \
+  cp next.config.mjs next.config.mjs.backup; \
+  if [ ! -s next.config.mjs ] || ! grep -q "export default\|nextConfig" next.config.mjs; then \
+    echo "File is empty or has no config, creating new content..."; \
+    echo "/** @type {import('next').NextConfig} */" > next.config.mjs; \
+    echo "const nextConfig = {" >> next.config.mjs; \
+    echo "  typescript: { ignoreBuildErrors: true }," >> next.config.mjs; \
+    echo "  eslint: { ignoreDuringBuilds: true }" >> next.config.mjs; \
+    echo "};" >> next.config.mjs; \
+    echo "" >> next.config.mjs; \
+    echo "export default nextConfig;" >> next.config.mjs; \
+  else \
+    echo "File has content, modifying existing config..."; \
+    if ! grep -q "typescript.*ignoreBuildErrors" next.config.mjs; then \
+      sed -i '/export default.*{/a\  typescript: { ignoreBuildErrors: true },' next.config.mjs; \
+    fi; \
+    if ! grep -q "eslint.*ignoreDuringBuilds" next.config.mjs; then \
+      sed -i '/export default.*{/a\  eslint: { ignoreDuringBuilds: true },' next.config.mjs; \
+    fi; \
+    sed -i 's/ignoreBuildErrors:.*false/ignoreBuildErrors: true/g' next.config.mjs; \
+    sed -i 's/ignoreDuringBuilds:.*false/ignoreDuringBuilds: true/g' next.config.mjs; \
+  fi; \
+  echo "=== Modified next.config.mjs content ==="; \
+  cat next.config.mjs; \
+  echo "=== End of modified content ==="; \
+else \
+  echo "No Next.js config found, creating next.config.js..."; \
+  echo "/** @type {import('next').NextConfig} */" > next.config.js; \
+  echo "const nextConfig = {" >> next.config.js; \
+  echo "  typescript: { ignoreBuildErrors: true }," >> next.config.js; \
+  echo "  eslint: { ignoreDuringBuilds: true }" >> next.config.js; \
+  echo "};" >> next.config.js; \
+  echo "" >> next.config.js; \
+  echo "module.exports = nextConfig;" >> next.config.js; \
+  echo "=== Created next.config.js content ==="; \
+  cat next.config.js; \
+  echo "=== End of created content ==="; \
+fi
+
+
+RUN echo "phase - 3 point - hint(installing neccessary packages to run the project)"
+
+
+
+
+
+
+
+
+RUN set -e;   DEFAULT_INSTALL_CMD="npm install";   OV=$(grep -E '^installcommand=' /pxxl/conf.txt | head -n1 | cut -d'=' -f2-);   if [ -n "$OV" ]; then echo "Using overridden install command: $OV"; sh -lc "$OV"; else sh -lc "$DEFAULT_INSTALL_CMD"; fi
+
+RUN echo "phase - 4 point - hint(building the project)"
+RUN set -e;   DEFAULT_BUILD_CMD="npm run build";   OV=$(grep -E '^buildcommand=' /pxxl/conf.txt | head -n1 | cut -d'=' -f2-);   if [ -n "$OV" ]; then echo "Using overridden build command: $OV"; sh -lc "$OV"; else sh -lc "$DEFAULT_BUILD_CMD"; fi
+
+
+
+RUN echo "=== Cleaning up development dependencies ==="     && if [ -f package.json ]; then npm prune --omit=dev --ignore-scripts || true; else echo "Skipping npm prune (no package.json)"; fi     && echo "=== Removing build caches ==="     && rm -rf node_modules/.cache     && rm -rf .next/cache     && echo "=== Clearing package manager caches ==="
+
+RUN set -e; cd /app; mkdir -p /pxxl/export; for p in .next node_modules package.json public next.config.js next.config.ts next.config.mjs .env yarn.lock pnpm-lock.yaml bun.lockb package-lock.json .yarnrc.yml .npmrc .yarn .pnp.cjs .pnp.loader.mjs; do   if [ -e "$p" ]; then cp -r "$p" /pxxl/export/; fi; done
+
+RUN ls /pxxl/export
+
+# Production stage
+FROM node:24-alpine AS runner
+
+
+WORKDIR /app
+
+RUN echo "phase - 5 point - hint(setting up production environment)" &&     apk add --no-cache     openssl     curl     bash     make     g++     linux-headers     libc-dev     tzdata
+
+RUN cp /usr/share/zoneinfo/UTC /etc/localtime && echo "UTC" > /etc/timezone
+ENV TZ=UTC
+
+
+
+
+
+
+
+
+
+
+# Copy required files
+
+RUN echo "phase - 6 point - hint(copying required files and finalizing the production environment)"
+
+
+COPY --from=builder /pxxl/export/. ./
+RUN rm -f *.ts *.tsx
+
+
+# Copy built application and necessary files
+COPY --from=builder /pxxl /pxxl
+
+ARG EXPOSE_PORT=3000
+ENV EXPOSE_PORT=3000
+
+RUN CONF_PORT=$(awk 'NR==1 {gsub(/[^0-9]/,"");print}' /pxxl/conf.txt 2>/dev/null);     [ -n "$CONF_PORT" ] && echo "Using port $CONF_PORT" || echo "Fallback $EXPOSE_PORT"
+
+EXPOSE $EXPOSE_PORT
+
+  RUN mkdir -p /pxxl &&     echo '#!/bin/sh' > /pxxl/run.sh &&     echo 'echo "Runtime Environment Started"' >> /pxxl/run.sh &&     echo '' >> /pxxl/run.sh &&     echo 'PORT=$EXPOSE_PORT' >> /pxxl/run.sh &&     echo 'DLX_BIN="npx"' >> /pxxl/run.sh &&     echo 'PM_BIN="npm"' >> /pxxl/run.sh &&     echo '' >> /pxxl/run.sh &&     echo 'if [ -s /pxxl/conf.txt ]; then' >> /pxxl/run.sh &&     echo '    P=$(grep -Eo "^[0-9]+" /pxxl/conf.txt | head -n1)' >> /pxxl/run.sh &&     echo '    if [ -n "$P" ]; then PORT=$P; fi' >> /pxxl/run.sh &&     echo '' >> /pxxl/run.sh &&     echo '    START_CMD=$(grep -E "^startcommand=" /pxxl/conf.txt | head -n1 | cut -d"=" -f2-)' >> /pxxl/run.sh &&     echo 'fi' >> /pxxl/run.sh &&     echo '' >> /pxxl/run.sh &&     echo 'if [ -n "$START_CMD" ]; then' >> /pxxl/run.sh &&     echo '    echo "Starting via override: $START_CMD"' >> /pxxl/run.sh &&     echo '    PORT=$PORT sh -lc "$START_CMD"' >> /pxxl/run.sh &&     echo '    exit 0' >> /pxxl/run.sh &&     echo 'fi' >> /pxxl/run.sh &&     echo '' >> /pxxl/run.sh &&     echo '' >> /pxxl/run.sh &&     echo 'if [ "false" = "true" ]; then' >> /pxxl/run.sh &&     echo '    if [ "false" = "true" ]; then' >> /pxxl/run.sh &&     echo '        echo "Starting server on port $PORT"' >> /pxxl/run.sh &&     echo '        $DLX_BIN serve dist -p $PORT --single' >> /pxxl/run.sh &&     echo '    else' >> /pxxl/run.sh &&     echo '        echo "Starting server on port $PORT"' >> /pxxl/run.sh &&     echo '        http-server dist -p $PORT' >> /pxxl/run.sh &&     echo '    fi' >> /pxxl/run.sh &&     echo 'else' >> /pxxl/run.sh &&     echo '    echo "Starting app on port $PORT"' >> /pxxl/run.sh &&     echo '    CMD_TO_RUN="next start"' >> /pxxl/run.sh &&     echo '    if echo "$CMD_TO_RUN" | grep -Eqi "^(npm|npx|yarn|pnpm|bun|dolph)s"; then' >> /pxxl/run.sh &&     echo '        PORT=$PORT $CMD_TO_RUN' >> /pxxl/run.sh &&     echo '    else' >> /pxxl/run.sh &&     echo '        PORT=$PORT $DLX_BIN next start' >> /pxxl/run.sh &&     echo '    fi' >> /pxxl/run.sh &&     echo 'fi' >> /pxxl/run.sh &&     chmod +x /pxxl/run.sh
+
+CMD ["sh", "/pxxl/run.sh"]

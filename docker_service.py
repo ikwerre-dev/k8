@@ -170,15 +170,15 @@ def remove_image(tag_or_id: str, force: bool = False) -> Dict[str, Any]:
 
 def prune_images() -> Dict[str, Any]:
     client = get_client()
-    return client.images.prune()
+    return client.images.prune(filters={"until": int(time.time() - 15 * 60)})
 
 
 def prune_system() -> Dict[str, Any]:
     client = get_client()
     return {
-        "containers": client.containers.prune(),
-        "images": client.images.prune(),
-        "networks": client.networks.prune(),
+        "containers": client.containers.prune(filters={"until": int(time.time() - 15 * 60)}),
+        "images": client.images.prune(filters={"until": int(time.time() - 15 * 60)}),
+        "networks": client.networks.prune(filters={"until": int(time.time() - 15 * 60)}),
         # volumes prune requires low-level API
     }
 
