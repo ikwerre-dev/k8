@@ -1188,6 +1188,61 @@ def inspect_container_details(id_or_name: str) -> dict:
         "computed": {"root_size_kb": computed_root, "paths": computed_paths},
     }
 
+def path_kind_in_container(id_or_name: str, path: str = "/") -> dict:
+    client = get_client()
+    c = client.containers.get(id_or_name)
+    cmd = f"sh -lc 'if [ -d \"{path}\" ]; then echo dir; elif [ -f \"{path}\" ]; then echo file; else echo missing; fi'"
+    res = c.exec_run(cmd)
+    try:
+        output = res.output.decode("utf-8", errors="ignore").strip()
+    except Exception:
+        output = res[1].decode("utf-8", errors="ignore").strip() if isinstance(res, tuple) else ""
+    kind = "missing"
+    if output == "dir":
+        kind = "directory"
+    elif output == "file":
+        kind = "file"
+    return {"path": path, "kind": kind}
+
+def read_file_in_container(id_or_name: str, path: str, max_bytes: int = 200000) -> dict:
+    client = get_client()
+    c = client.containers.get(id_or_name)
+    sres = c.exec_run(f"sh -c 'stat -c \"%n|%F|%s|%U|%G|%a|%y\" \"{path}\" 2>/dev/null || true'")
+    try:
+        sout = sres.output.decode("utf-8", errors="ignore").strip()
+    except Exception:
+        sout = sres[1].decode("utf-8", errors="ignore").strip() if isinstance(sres, tuple) else ""
+    parts = sout.split("|") if sout else []
+    cres = c.exec_run(f"sh -c 'head -c {int(max_bytes)} \"{path}\" 2>/dev/null || true'")
+    try:
+        content = cres.output.decode("utf-8", errors="ignore")
+    except Exception:
+        content = cres[1].decode("utf-8", errors="ignore") if isinstance(cres, tuple) else ""
+    size_bytes = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+    truncated = False
+    if size_bytes is not None and size_bytes > int(max_bytes):
+        truncated = True
+    meta = {
+        "name": parts[0] if len(parts) > 0 else None,
+        "type": parts[1] if len(parts) > 1 else None,
+        "size_bytes": size_bytes,
+        "owner": parts[3] if len(parts) > 3 else None,
+        "group": parts[4] if len(parts) > 4 else None,
+        "perms": parts[5] if len(parts) > 5 else None,
+        "mtime": parts[6] if len(parts) > 6 else None,
+    }
+    return {"kind": "file", "path": path, "meta": meta, "content": content, "truncated": truncated}
+
+def list_or_read_in_container(id_or_name: str, path: str = "/", include_sizes: bool = True, max_bytes: int = 200000) -> dict:
+    kind_res = path_kind_in_container(id_or_name, path or "/")
+    kind = kind_res.get("kind")
+    if kind == "directory":
+        res = ls_detailed_in_container(id_or_name, path or "/", include_sizes=include_sizes)
+        return {"kind": "directory", "path": res.get("path"), "entries": res.get("entries"), "count": res.get("count")}
+    if kind == "file":
+        return read_file_in_container(id_or_name, path or "/", max_bytes=max_bytes)
+    return {"kind": "missing", "path": path or "/"}
+
 # Blue-green deploy helpers and orchestration
 
 def _extract_volumes_from_container(container) -> Dict[str, dict]:
