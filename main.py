@@ -1024,7 +1024,7 @@ def docker_build_stream(req: BuildStreamRequest):
 @app.post("/docker/container/ls")
 def docker_container_ls(req: ContainerLsRequest):
     try:
-        res = ds.ls_in_container(req.container, req.path or "/")
+        res = ds.list_or_read_in_container(req.container, req.path or "/", include_sizes=True, max_bytes=200000)
         return res
     except Exception as e:
         msg = str(e)
