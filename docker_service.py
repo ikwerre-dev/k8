@@ -2094,6 +2094,7 @@ def transfer_build_to_http(build_dir: str, task_id: str, upload_url: str, emit: 
                 "ts": _ts(),
             })
 
+    tmp_dir = None
     try:
         import tarfile
         import tempfile
@@ -2195,6 +2196,12 @@ def transfer_build_to_http(build_dir: str, task_id: str, upload_url: str, emit: 
         msg = f"HTTP upload encountered an exception: {str(e)}"
         _emit_log(msg, level="error")
         return {"status": "error", "error": msg}
+    finally:
+        try:
+            if tmp_dir and os.path.isdir(tmp_dir):
+                shutil.rmtree(tmp_dir)
+        except Exception:
+            pass
 
 def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None) -> Dict[str, Any]:
     def _ts() -> str:
@@ -2213,6 +2220,7 @@ def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, e
                 "ts": _ts(),
             })
 
+    tmp_dir = None
     try:
         import tarfile
         import tempfile
@@ -2397,11 +2405,21 @@ def transfer_build_to_rsync_ssh(build_dir: str, task_id: str, ssh_target: str, e
         msg = f"SSH rsync upload encountered an exception: {str(e)}"
         _emit_log(msg, level="error")
         return {"status": "error", "error": msg}
+    finally:
+        try:
+            if tmp_dir and os.path.isdir(tmp_dir):
+                shutil.rmtree(tmp_dir)
+        except Exception:
+            pass
 def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile: Optional[str] = None, build_args: Optional[Dict[str, str]] = None, task_id: Optional[str] = None, override_log_endpoint: Optional[str] = None, dockerfile_content: Optional[str] = None, dockerfile_name: Optional[str] = None, cleanup: Optional[bool] = True, nocache: Optional[bool] = True, emit: Optional[Callable[[Dict[str, Any]], None]] = None, app_id: Optional[str] = None, upload_url: Optional[str] = None) -> dict:
     client = get_client()
     endpoint = override_log_endpoint or get_log_endpoint()
     headers = get_auth_header()
     logs_collected: List[Dict[str, Any]] = []
+    try:
+        os.environ["DOCKER_BUILDKIT"] = "1"
+    except Exception:
+        pass
 
     # Prepare on-disk logging paths per task_id
     base_logs_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "builds"))
@@ -2488,6 +2506,18 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             name = dockerfile_name or "Dockerfile"
             created_path = os.path.join(context_path, name)
             os.makedirs(context_path, exist_ok=True)
+            try:
+                for entry in os.listdir(context_path):
+                    p = os.path.join(context_path, entry)
+                    try:
+                        if os.path.isdir(p):
+                            shutil.rmtree(p)
+                        else:
+                            os.remove(p)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             with open(created_path, "w") as f:
                 f.write(dockerfile_content)
             used_dockerfile_content = dockerfile_content
@@ -2567,10 +2597,11 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             tag=tag,
             dockerfile=df_arg,
             buildargs=build_args or {},
-            rm=True,
-            forcerm=True,
+            rm=False,
+            forcerm=False,
             decode=True,
             nocache=bool(nocache),
+            pull=True,
         )
         step_count = 0
         build_failed = False
@@ -2770,26 +2801,125 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
             _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] build failed error {build_failure_msg} app_id={app_id or ''}")
             _append_line(error_log_path, build_failure_msg or "build failed")
             _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "build_failed", "message": build_failure_msg})
-            # Write failure summary immediately for consumers
             try:
-                if summary_path:
-                    _write_json(summary_path, {
-                        "status": "failed",
-                        "stage": "building",
-                        "error": build_failure_msg,
-                        "tag": tag,
-                        "dockerfile_used": df_arg or "Dockerfile",
-                        "inline": bool(dockerfile_content),
-                        "nocache": bool(nocache),
-                        "duration_sec": total_dur,
-                        "steps_detected": len(steps),
-                        "app_id": app_id,
-                        "build_args": build_args or {},
-                    })
+                if build_failure_msg and ("unknown parent image ID" in build_failure_msg or "failed to set parent" in build_failure_msg):
+                    _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] fallback buildx attempting")
+                    _append_json(build_structured_path, {"ts": _ts(), "level": "warn", "event": "fallback_attempt_buildx"})
+                    try:
+                        import subprocess
+                        cmd = [
+                            "docker", "buildx", "build", "--load",
+                            "-t", str(tag or ""),
+                            "-f", str(df_arg or "Dockerfile"),
+                        ]
+                        if bool(nocache):
+                            cmd.append("--no-cache")
+                        cmd.append(str(context_path))
+                        res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                        try:
+                            if res.stdout:
+                                for ln in res.stdout.splitlines():
+                                    _append_line(build_log_path, ln)
+                                    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "buildx_stdout", "text": ln})
+                            if res.stderr:
+                                for ln in res.stderr.splitlines():
+                                    _append_line(build_log_path, ln)
+                                    _append_json(build_structured_path, {"ts": _ts(), "level": "warn", "event": "buildx_stderr", "text": ln})
+                        except Exception:
+                            pass
+                        if res.returncode == 0:
+                            try:
+                                if tag:
+                                    try:
+                                        img = client.images.get(tag)
+                                        image_id = img.id
+                                    except Exception:
+                                        image_id = image_id or None
+                                build_failed = False
+                                build_failure_msg = None
+                                _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] fallback buildx succeeded")
+                                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "fallback_buildx_succeeded", "tag": tag})
+                            except Exception:
+                                pass
+                        else:
+                            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] fallback buildx failed rc={res.returncode}")
+                            _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "fallback_buildx_failed", "rc": res.returncode})
+                    except Exception as fb_err:
+                        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] fallback buildx exception {fb_err}")
+                        _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "fallback_buildx_exception", "error": str(fb_err)})
             except Exception:
                 pass
-            # Raise to exit and prevent export/upload progression
-            raise Exception(build_failure_msg or "Docker build failed")
+            # Write failure summary immediately for consumers
+            try:
+                if build_failure_msg and ("unknown parent image ID" in build_failure_msg or "failed to set parent" in build_failure_msg):
+                    builder_name = f"pxxl-builder-{(task_id or str(time.time()))[:12]}"
+                    try:
+                        import subprocess
+                        create_cmd = ["docker", "buildx", "create", "--name", builder_name, "--use"]
+                        subprocess.run(create_cmd, capture_output=True, text=True, check=False)
+                        cmd = [
+                            "docker", "buildx", "build", "--load",
+                            "--builder", builder_name,
+                            "-t", str(tag or ""),
+                            "-f", str(df_arg or "Dockerfile"),
+                        ]
+                        if bool(nocache):
+                            cmd.append("--no-cache")
+                        cmd.append(str(context_path))
+                        res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                        try:
+                            if res.stdout:
+                                for ln in res.stdout.splitlines():
+                                    _append_line(build_log_path, ln)
+                                    _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "buildx_stdout", "text": ln})
+                            if res.stderr:
+                                for ln in res.stderr.splitlines():
+                                    _append_line(build_log_path, ln)
+                                    _append_json(build_structured_path, {"ts": _ts(), "level": "warn", "event": "buildx_stderr", "text": ln})
+                        except Exception:
+                            pass
+                        try:
+                            subprocess.run(["docker", "buildx", "rm", builder_name], capture_output=True, text=True, check=False)
+                        except Exception:
+                            pass
+                        if res.returncode == 0:
+                            try:
+                                if tag:
+                                    try:
+                                        img = client.images.get(tag)
+                                        image_id = img.id
+                                    except Exception:
+                                        image_id = image_id or None
+                                build_failed = False
+                                build_failure_msg = None
+                                _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] fallback buildx succeeded")
+                                _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "fallback_buildx_succeeded", "tag": tag})
+                            except Exception:
+                                pass
+                    except Exception as fb_err:
+                        _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] fallback buildx exception {fb_err}")
+                        _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "fallback_buildx_exception", "error": str(fb_err)})
+            except Exception:
+                pass
+            if build_failed:
+                try:
+                    if summary_path:
+                        _write_json(summary_path, {
+                            "status": "failed",
+                            "stage": "building",
+                            "error": build_failure_msg,
+                            "tag": tag,
+                            "dockerfile_used": df_arg or "Dockerfile",
+                            "inline": bool(dockerfile_content),
+                            "nocache": bool(nocache),
+                            "duration_sec": total_dur,
+                            "steps_detected": len(steps),
+                            "app_id": app_id,
+                            "build_args": build_args or {},
+                        })
+                except Exception:
+                    pass
+                raise Exception(build_failure_msg or "Docker build failed")
         # Emit completed event
         if emit:
             try:
@@ -2964,6 +3094,15 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                     _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer completed successfully")
                     _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: artifact transfer completed successfully files={upload_result['files_transferred']} size_bytes={upload_result['total_size_bytes']}")
                     _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "transfer_completed", "stage": "uploading", "status": "completed", "files_transferred": upload_result["files_transferred"], "total_size_bytes": upload_result["total_size_bytes"], "command": "pxxl launch transfer"})
+                    try:
+                        ap = upload_result.get("archive_path")
+                        if ap and os.path.exists(ap):
+                            os.remove(ap)
+                            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: removed local archive {ap}")
+                            _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] pxxl transfer: removed local archive {ap}")
+                            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "transfer_cleanup_local_archive", "removed": ap})
+                    except Exception:
+                        pass
                     if emit:
                         try:
                             emit({
@@ -2985,6 +3124,15 @@ def stream_build_image(context_path: str, tag: Optional[str] = None, dockerfile:
                         _append_line(error_log_path, str(upload_result.get("error") or ""))
                         _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] transfer error detail: {str(upload_result.get('error') or '')}")
                         _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] transfer error detail: {str(upload_result.get('error') or '')}")
+                    except Exception:
+                        pass
+                    try:
+                        ap = upload_result.get("archive_path")
+                        if ap and os.path.exists(ap):
+                            os.remove(ap)
+                            _append_line(events_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] transfer error: removed local archive {ap}")
+                            _append_line(build_log_path, f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] transfer error: removed local archive {ap}")
+                            _append_json(build_structured_path, {"ts": _ts(), "level": "info", "event": "transfer_cleanup_local_archive", "removed": ap})
                     except Exception:
                         pass
                     _append_json(build_structured_path, {"ts": _ts(), "level": "error", "event": "transfer_error", "stage": "uploading", "status": "error", "command": "pxxl launch transfer", "error": upload_result.get("error")})

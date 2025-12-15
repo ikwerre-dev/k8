@@ -97,6 +97,13 @@ def _sweep_tmp_docker_builds(max_age_minutes: int = 20):
             try:
                 if not os.path.isdir(p):
                     continue
+                try:
+                    from task_registry import get as _get_task
+                    t = _get_task(name)
+                    if isinstance(t, dict) and str(t.get("status")).lower() == "running":
+                        continue
+                except Exception:
+                    pass
                 m = os.path.getmtime(p)
                 c = os.path.getctime(p)
                 age = now - max(m, c)
@@ -1096,11 +1103,16 @@ def pipeline_html_site(req: HtmlSitePipelineRequest):
 def tasks_logs(task_id: str, tail: int = 20000, server: Optional[str] = None):
     try:
         import json
-        from task_registry import get
+        from task_registry import get, set_error
+        import db_service as db
+        import time
         
         # Get task registry info
         t = get(task_id)
         status = t.get("status") if isinstance(t, dict) else "unknown"
+        created_at = t.get("created_at") if isinstance(t, dict) else None
+        now_ts = time.time()
+        age_sec = (now_ts - float(created_at)) if created_at else 0.0
         
         # Resolve base directory based on server param
         base_dir = None
@@ -1270,6 +1282,52 @@ def tasks_logs(task_id: str, tail: int = 20000, server: Optional[str] = None):
                     # Do not surface sensitive SFTP params in API response
                 except Exception:
                     pass
+                # Upsert project record
+                try:
+                    app_id_val = summary_obj.get("app_id")
+                    container_id_val = summary_obj.get("container_id") or summary_obj.get("container_name")
+                    if app_id_val:
+                        db.upsert_application(str(app_id_val), container_id_val)
+                except Exception:
+                    pass
+            else:
+                # Attempt to derive app_id from task events and upsert
+                try:
+                    evs = (t.get("events") or []) if isinstance(t, dict) else []
+                    app_id_val = None
+                    for ev in evs:
+                        if isinstance(ev, dict) and ev.get("app_id"):
+                            app_id_val = ev.get("app_id")
+                            break
+                    if app_id_val:
+                        db.upsert_application(str(app_id_val), None)
+                except Exception:
+                    pass
+
+            # Enforce build state and auto-fail when not active, with startup grace
+            try:
+                still_building = False
+                summary_status = (summary_obj or {}).get("status") if summary_obj else None
+                summary_stage = (summary_obj or {}).get("stage") if summary_obj else None
+                if str(status).lower() == "running":
+                    still_building = True
+                if summary_status in ("running", "building"):
+                    still_building = True
+                if summary_stage in ("building", "uploading"):
+                    still_building = True
+                tmp_dir = os.path.join("/tmp/docker-builds", task_id)
+                if os.path.isdir(tmp_dir):
+                    still_building = True
+                # Grace window: do not fail within first 60s of task creation
+                if (not still_building) and (age_sec > 60.0):
+                    try:
+                        set_error(task_id, "build not active; deployment failed")
+                        build_info["status"] = "failed"
+                        build_info["failed_reason"] = "build not active"
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             
             # Load parsed Dockerfile metadata
             parsed_dockerfile_path = os.path.join(builds_dir, "dockerfile.parsed.json")
@@ -1281,6 +1339,24 @@ def tasks_logs(task_id: str, tail: int = 20000, server: Optional[str] = None):
                     pass
         else:
             build_info["error"] = f"logs directory not found: {builds_dir}"
+            try:
+                # Check alternate summary paths and tmp builder indicator
+                summary_path, _bd = _resolve_summary_path(task_id)
+                tmp_dir = os.path.join("/tmp/docker-builds", task_id)
+                summary_exists = os.path.exists(summary_path)
+                tmp_exists = os.path.isdir(tmp_dir)
+                # Only fail if clearly inactive and past grace window
+                if (str(status).lower() != "running") and (not summary_exists) and (not tmp_exists) and (age_sec > 60.0):
+                    set_error(task_id, "logs directory not found")
+                    build_info["status"] = "failed"
+                    build_info["failed_reason"] = "logs directory not found"
+                else:
+                    # Reflect starting state if within grace
+                    if str(status).lower() == "running" or tmp_exists or (age_sec <= 60.0):
+                        build_info["status"] = build_info.get("status") or "running"
+                        build_info["stage"] = build_info.get("stage") or "building"
+            except Exception:
+                pass
         
         return build_info
     except Exception as e:
@@ -1289,8 +1365,55 @@ def tasks_logs(task_id: str, tail: int = 20000, server: Optional[str] = None):
 @app.get("/tasks/status/{task_id}")
 def tasks_status(task_id: str):
     try:
-        from task_registry import get
-        return get(task_id)
+        from task_registry import get, set_error
+        import db_service as db
+        import json
+        import time
+        t = get(task_id)
+        summary_path, builds_dir = _resolve_summary_path(task_id)
+        summary_obj = None
+        try:
+            if os.path.exists(summary_path):
+                with open(summary_path, "r") as f:
+                    summary_obj = json.load(f)
+        except Exception:
+            summary_obj = None
+        try:
+            if summary_obj and summary_obj.get("app_id"):
+                db.upsert_application(str(summary_obj.get("app_id")), summary_obj.get("container_id") or summary_obj.get("container_name"))
+            else:
+                evs = (t.get("events") or []) if isinstance(t, dict) else []
+                app_id_val = None
+                for ev in evs:
+                    if isinstance(ev, dict) and ev.get("app_id"):
+                        app_id_val = ev.get("app_id")
+                        break
+                if app_id_val:
+                    db.upsert_application(str(app_id_val), None)
+        except Exception:
+            pass
+        try:
+            still_building = False
+            status_val = t.get("status") if isinstance(t, dict) else None
+            created_at = t.get("created_at") if isinstance(t, dict) else None
+            age_sec = (time.time() - float(created_at)) if created_at else 0.0
+            if str(status_val).lower() == "running":
+                still_building = True
+            if summary_obj:
+                if summary_obj.get("status") in ("running", "building"):
+                    still_building = True
+                if summary_obj.get("stage") in ("building", "uploading"):
+                    still_building = True
+            if os.path.isdir(os.path.join("/tmp/docker-builds", task_id)):
+                still_building = True
+            if (not still_building) and (age_sec > 60.0):
+                try:
+                    set_error(task_id, "build not active; deployment failed")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return t
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
