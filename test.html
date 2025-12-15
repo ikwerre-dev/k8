@@ -1,45 +1,569 @@
-<!doctype html>
-<html>
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<link rel="stylesheet" href="https://unpkg.com/xterm@5.3.1/css/xterm.css" />
-<style>
-html,body{height:100%;margin:0;padding:0;background:#111;color:#ddd;font-family:system-ui}
-#term{height:100vh}
-</style>
-</head>
-<body>
-<div id="term"></div>
-<script src="https://unpkg.com/xterm@5.3.1/lib/xterm.js"></script>
-<script>
-const containerId = "51e62b725033";
-const cmd = "sh";
-const host = "localhost:8000";
-const proto = location.protocol === "https:" ? "wss" : "ws";
-const ws = new WebSocket(`${proto}://${host}/terminal/${containerId}?cmd=${encodeURIComponent(cmd)}`);
-const term = new window.Terminal();
-term.open(document.getElementById("term"));
-let execId = null;
-ws.onmessage = (ev) => {
-  const d = ev.data;
-  if (typeof d === "string" && d.startsWith("{")) {
-    try { const obj = JSON.parse(d); if (obj.exec_id) execId = obj.exec_id; } catch(e) {}
-    return;
-  }
-  term.write(typeof d === "string" ? d : new TextDecoder().decode(d));
+[2025-12-14 18:29:43] build initialized tag=e34b7261-09dc-44cd-857c-8760a55724e9:latest context=/tmp/docker-builds/docker_build-1765736983808404-90c69526-f07d65b3dd33446d820d860e7d86febe-99651 app_id=e34b7261-09dc-44cd-857c-8760a55724e9
+[2025-12-14 18:29:43] context prepared path=/tmp/docker-builds/docker_build-1765736983808404-90c69526-f07d65b3dd33446d820d860e7d86febe-99651 dockerfile_name=Dockerfile
+[2025-12-14 18:29:43] build starting dockerfile=Dockerfile inline=True app_id=e34b7261-09dc-44cd-857c-8760a55724e9
+[2025-12-14 18:29:43] [INFO ] Step 1/29 : FROM node:24-alpine AS builder
+[2025-12-14 18:29:43] [INFO ]
+[2025-12-14 18:29:45] [INFO ] Pulling from library/node
+[2025-12-14 18:29:45] [INFO ] Pulling fs layer
+[2025-12-14 18:29:45] [INFO ] Pulling fs layer
+[2025-12-14 18:29:45] [INFO ] Pulling fs layer
+[2025-12-14 18:29:45] [INFO ] Pulling fs layer
+[2025-12-14 18:29:45] [INFO ] Waiting
+[2025-12-14 18:29:45] [INFO ] Downloading
+[2025-12-14 18:29:45] [INFO ] Downloading
+[2025-12-14 18:29:46] [INFO ] Verifying Checksum
+[2025-12-14 18:29:46] [INFO ] Download complete
+[2025-12-14 18:29:46] [INFO ] Extracting
+[2025-12-14 18:29:46] [INFO ] Download complete
+[2025-12-14 18:29:46] [INFO ] Downloading
+[2025-12-14 18:29:46] [INFO ] Extracting
+[2025-12-14 18:29:46] [INFO ] Downloading
+[2025-12-14 18:29:46] [INFO ] Extracting
+[2025-12-14 18:29:46] [INFO ] Extracting
+[2025-12-14 18:29:46] [INFO ] Pull complete
+[2025-12-14 18:29:46] [INFO ] Downloading
+[2025-12-14 18:29:46] [INFO ] Downloading
+[2025-12-14 18:29:46] [INFO ] Downloading
+[2025-12-14 18:29:46] [INFO ] Downloading
+[2025-12-14 18:29:46] [INFO ] Verifying Checksum
+[2025-12-14 18:29:46] [INFO ] Download complete
+[2025-12-14 18:29:46] [INFO ] Downloading
+[2025-12-14 18:29:46] [INFO ] Verifying Checksum
+[2025-12-14 18:29:46] [INFO ] Download complete
+[2025-12-14 18:29:46] [INFO ] Extracting
+[2025-12-14 18:29:46] [INFO ] Extracting
+[2025-12-14 18:29:46] [INFO ] Extracting
+[2025-12-14 18:29:46] [INFO ] Extracting
+[2025-12-14 18:29:47] [INFO ] Extracting
+[2025-12-14 18:29:47] [INFO ] Extracting
+[2025-12-14 18:29:47] [INFO ] Extracting
+[2025-12-14 18:29:47] [INFO ] Extracting
+[2025-12-14 18:29:47] [INFO ] Extracting
+[2025-12-14 18:29:47] [INFO ] Extracting
+[2025-12-14 18:29:47] [INFO ] Extracting
+[2025-12-14 18:29:47] [INFO ] Extracting
+[2025-12-14 18:29:47] [INFO ] Extracting
+[2025-12-14 18:29:48] [INFO ] Extracting
+[2025-12-14 18:29:48] [INFO ] Extracting
+[2025-12-14 18:29:48] [INFO ] Extracting
+[2025-12-14 18:29:48] [INFO ] Extracting
+[2025-12-14 18:29:48] [INFO ] Extracting
+[2025-12-14 18:29:48] [INFO ] Extracting
+[2025-12-14 18:29:49] [INFO ] Extracting
+[2025-12-14 18:29:49] [INFO ] Pull complete
+[2025-12-14 18:29:49] [INFO ] Extracting
+[2025-12-14 18:29:49] [INFO ] Extracting
+[2025-12-14 18:29:49] [INFO ] Extracting
+[2025-12-14 18:29:49] [INFO ] Pull complete
+[2025-12-14 18:29:49] [INFO ] Extracting
+[2025-12-14 18:29:49] [INFO ] Extracting
+[2025-12-14 18:29:49] [INFO ] Pull complete
+[2025-12-14 18:29:49] [INFO ] Digest: sha256:7e0bd0460b26eb3854ea5b99b887a6a14d665d14cae694b78ae2936d14b2befb
+[2025-12-14 18:29:49] [INFO ] Status: Downloaded newer image for node:24-alpine
+[2025-12-14 18:29:49] [INFO ]  ---> fe065ce6eeba
+[2025-12-14 18:29:49] [INFO ] Step 2/29 : WORKDIR /app
+[2025-12-14 18:29:49] [INFO ]
+[2025-12-14 18:29:49] [INFO ]  ---> Running in 8e016799cb82
+[2025-12-14 18:29:49] [INFO ]  ---> Removed intermediate container 8e016799cb82
+[2025-12-14 18:29:49] [INFO ]  ---> 7c903ecb4392
+[2025-12-14 18:29:49] [INFO ] Step 3/29 : RUN echo "phase - 1 point - hint(setting up container environment)" &&     apk add --no-cache     git     openssl     openssh     jq     curl     bash     dos2unix     tzdata     python3     make     g++     linux-headers     libc-dev     libusb-dev     eudev-dev     autoconf     automake     pkgconfig     cairo-dev     pango-dev     jpeg-dev     giflib-dev     pixman-dev     pangomm-dev     libjpeg-turbo-dev     && cp /usr/share/zoneinfo/UTC /etc/localtime && echo "UTC" > /etc/timezone
+[2025-12-14 18:29:49] [INFO ]
+[2025-12-14 18:29:49] [INFO ]  ---> Running in e5b987ca42c4
+[2025-12-14 18:29:49] [INFO ] phase - 1 point - hint(setting up container environment)
+[2025-12-14 18:29:50] [INFO ] (  1/180) Installing m4 (1.4.20-r0)
+[2025-12-14 18:29:50] [INFO ] (  2/180) Installing libbz2 (1.0.8-r6)
+[2025-12-14 18:29:50] [INFO ] (  3/180) Installing perl (5.42.0-r0)
+[2025-12-14 18:29:51] [INFO ] (  4/180) Installing autoconf (2.72-r1)
+[2025-12-14 18:29:51] [INFO ] (  5/180) Installing automake (1.18.1-r0)
+[2025-12-14 18:29:51] [INFO ] (  6/180) Installing ncurses-terminfo-base (6.5_p20251123-r0)
+[2025-12-14 18:29:51] [INFO ] (  7/180) Installing libncursesw (6.5_p20251123-r0)
+[2025-12-14 18:29:51] [INFO ] (  8/180) Installing readline (8.3.1-r0)
+[2025-12-14 18:29:51] [INFO ] (  9/180) Installing bash (5.3.3-r1)
+[2025-12-14 18:29:51] [INFO ]   Executing bash-5.3.3-r1.post-install
+[2025-12-14 18:29:51] [INFO ] ( 10/180) Installing cairo-tools (1.18.4-r0)
+[2025-12-14 18:29:51] [INFO ] ( 11/180) Installing libexpat (2.7.3-r0)
+[2025-12-14 18:29:51] [INFO ] ( 12/180) Installing brotli-libs (1.2.0-r0)
+[2025-12-14 18:29:51] [INFO ] ( 13/180) Installing libpng (1.6.53-r0)
+[2025-12-14 18:29:51] [INFO ] ( 14/180) Installing freetype (2.14.1-r0)
+[2025-12-14 18:29:51] [INFO ] ( 15/180) Installing fontconfig (2.17.1-r0)
+[2025-12-14 18:29:51] [INFO ] ( 16/180) Installing expat (2.7.3-r0)
+[2025-12-14 18:29:51] [INFO ] ( 17/180) Installing pkgconf (2.5.1-r0)
+[2025-12-14 18:29:51] [INFO ] ( 18/180) Installing expat-dev (2.7.3-r0)
+[2025-12-14 18:29:51] [INFO ] ( 19/180) Installing bzip2-dev (1.0.8-r6)
+[2025-12-14 18:29:51] [INFO ] ( 20/180) Installing brotli (1.2.0-r0)
+[2025-12-14 18:29:51] [INFO ] ( 21/180) Installing brotli-dev (1.2.0-r0)
+[2025-12-14 18:29:51] [INFO ] ( 22/180) Installing zlib-dev (1.3.1-r2)
+[2025-12-14 18:29:51] [INFO ] ( 23/180) Installing libpng-dev (1.6.53-r0)
+[2025-12-14 18:29:51] [INFO ] ( 24/180) Installing freetype-dev (2.14.1-r0)
+[2025-12-14 18:29:51] [INFO ] ( 25/180) Installing fontconfig-dev (2.17.1-r0)
+[2025-12-14 18:29:51] [INFO ] ( 26/180) Installing libxau (1.0.12-r0)
+[2025-12-14 18:29:51] [INFO ] ( 27/180) Installing xorgproto (2024.1-r0)
+[2025-12-14 18:29:51] [INFO ] ( 28/180) Installing libxau-dev (1.0.12-r0)
+[2025-12-14 18:29:52] [INFO ] ( 29/180) Installing libmd (1.1.0-r0)
+[2025-12-14 18:29:52] [INFO ] ( 30/180) Installing libbsd (0.12.2-r0)
+[2025-12-14 18:29:52] [INFO ] ( 31/180) Installing libxdmcp (1.1.5-r1)
+[2025-12-14 18:29:52] [INFO ] ( 32/180) Installing libxcb (1.17.0-r1)
+[2025-12-14 18:29:52] [INFO ] ( 33/180) Installing libx11 (1.8.12-r1)
+[2025-12-14 18:29:52] [INFO ] ( 34/180) Installing libxext (1.3.6-r2)
+[2025-12-14 18:29:52] [INFO ] ( 35/180) Installing libffi (3.5.2-r0)
+[2025-12-14 18:29:52] [INFO ] ( 36/180) Installing gdbm (1.26-r0)
+[2025-12-14 18:29:52] [INFO ] ( 37/180) Installing xz-libs (5.8.1-r0)
+[2025-12-14 18:29:52] [INFO ] ( 38/180) Installing mpdecimal (4.0.1-r0)
+[2025-12-14 18:29:52] [INFO ] ( 39/180) Installing libpanelw (6.5_p20251123-r0)
+[2025-12-14 18:29:52] [INFO ] ( 40/180) Installing sqlite-libs (3.51.1-r0)
+[2025-12-14 18:29:52] [INFO ] ( 41/180) Installing python3 (3.12.12-r0)
+[2025-12-14 18:29:52] [INFO ] ( 42/180) Installing python3-pycache-pyc0 (3.12.12-r0)
+[2025-12-14 18:29:52] [INFO ] ( 43/180) Installing pyc (3.12.12-r0)
+( 44/180) Installing xcb-proto-pyc (1.17.0-r0)
+[2025-12-14 18:29:52] [INFO ] ( 45/180) Installing python3-pyc (3.12.12-r0)
+( 46/180) Installing xcb-proto (1.17.0-r0)
+[2025-12-14 18:29:52] [INFO ] ( 47/180) Installing libxdmcp-dev (1.1.5-r1)
+[2025-12-14 18:29:52] [INFO ] ( 48/180) Installing libxcb-dev (1.17.0-r1)
+[2025-12-14 18:29:52] [INFO ] ( 49/180) Installing xtrans (1.6.0-r0)
+[2025-12-14 18:29:52] [INFO ] ( 50/180) Installing libx11-dev (1.8.12-r1)
+[2025-12-14 18:29:52] [INFO ] ( 51/180) Installing libxext-dev (1.3.6-r2)
+[2025-12-14 18:29:52] [INFO ] ( 52/180) Installing libxrender (0.9.12-r0)
+[2025-12-14 18:29:52] [INFO ] ( 53/180) Installing libxrender-dev (0.9.12-r0)
+[2025-12-14 18:29:53] [INFO ] ( 54/180) Installing pixman (0.46.4-r0)
+[2025-12-14 18:29:53] [INFO ] ( 55/180) Installing pixman-dev (0.46.4-r0)
+[2025-12-14 18:29:53] [INFO ] ( 56/180) Installing util-macros (1.20.2-r0)
+[2025-12-14 18:29:53] [INFO ] ( 57/180) Installing xcb-util (0.4.1-r3)
+[2025-12-14 18:29:53] [INFO ] ( 58/180) Installing xcb-util-dev (0.4.1-r3)
+[2025-12-14 18:29:53] [INFO ] ( 59/180) Installing cairo (1.18.4-r0)
+[2025-12-14 18:29:53] [INFO ] ( 60/180) Installing libintl (0.24.1-r1)
+[2025-12-14 18:29:53] [INFO ] ( 61/180) Installing libeconf (0.8.0-r0)
+[2025-12-14 18:29:53] [INFO ] ( 62/180) Installing libblkid (2.41.2-r0)
+[2025-12-14 18:29:53] [INFO ] ( 63/180) Installing libmount (2.41.2-r0)
+[2025-12-14 18:29:53] [INFO ] ( 64/180) Installing pcre2 (10.47-r0)
+[2025-12-14 18:29:53] [INFO ] ( 65/180) Installing glib (2.86.3-r0)
+[2025-12-14 18:29:53] [INFO ] ( 66/180) Installing cairo-gobject (1.18.4-r0)
+[2025-12-14 18:29:53] [INFO ] ( 67/180) Installing libxml2 (2.13.9-r0)
+[2025-12-14 18:29:53] [INFO ] ( 68/180) Installing libxml2-utils (2.13.9-r0)
+[2025-12-14 18:29:53] [INFO ] ( 69/180) Installing docbook-xml (4.5-r10)
+[2025-12-14 18:29:53] [INFO ]   Executing docbook-xml-4.5-r10.post-install
+[2025-12-14 18:29:53] [INFO ] ( 70/180) Installing libxslt (1.1.43-r3)
+[2025-12-14 18:29:53] [INFO ] ( 71/180) Installing docbook-xsl-ns (1.79.2-r13)
+[2025-12-14 18:29:53] [INFO ]   Executing docbook-xsl-ns-1.79.2-r13.post-install
+[2025-12-14 18:29:53] [INFO ] ( 72/180) Installing docbook-xsl-nons (1.79.2-r13)
+[2025-12-14 18:29:54] [INFO ]   Executing docbook-xsl-nons-1.79.2-r13.post-install
+[2025-12-14 18:29:54] [INFO ] ( 73/180) Installing docbook-xsl (1.79.2-r13)
+[2025-12-14 18:29:54] [INFO ] ( 74/180) Installing xz (5.8.1-r0)
+[2025-12-14 18:29:54] [INFO ] ( 75/180) Installing gettext-asprintf (0.24.1-r1)
+[2025-12-14 18:29:54] [INFO ] ( 76/180) Installing libunistring (1.4.1-r0)
+[2025-12-14 18:29:54] [INFO ] ( 77/180) Installing gettext-libs (0.24.1-r1)
+[2025-12-14 18:29:54] [INFO ] ( 78/180) Installing gettext-envsubst (0.24.1-r1)
+[2025-12-14 18:29:54] [INFO ] ( 79/180) Installing libgomp (15.2.0-r2)
+[2025-12-14 18:29:54] [INFO ] ( 80/180) Installing gettext (0.24.1-r1)
+[2025-12-14 18:29:54] [INFO ] ( 81/180) Installing gettext-dev (0.24.1-r1)
+[2025-12-14 18:29:54] [INFO ] ( 82/180) Installing py3-parsing (3.2.3-r0)
+[2025-12-14 18:29:54] [INFO ] ( 83/180) Installing py3-parsing-pyc (3.2.3-r0)
+[2025-12-14 18:29:54] [INFO ] ( 84/180) Installing py3-packaging (25.0-r0)
+[2025-12-14 18:29:54] [INFO ] ( 85/180) Installing py3-packaging-pyc (25.0-r0)
+[2025-12-14 18:29:54] [INFO ] ( 86/180) Installing linux-headers (6.16.12-r0)
+[2025-12-14 18:29:54] [INFO ] ( 87/180) Installing libffi-dev (3.5.2-r0)
+[2025-12-14 18:29:54] [INFO ] ( 88/180) Installing bsd-compat-headers (0.7.2-r6)
+[2025-12-14 18:29:54] [INFO ] ( 89/180) Installing libformw (6.5_p20251123-r0)
+[2025-12-14 18:29:54] [INFO ] ( 90/180) Installing libmenuw (6.5_p20251123-r0)
+[2025-12-14 18:29:54] [INFO ] ( 91/180) Installing libncurses++ (6.5_p20251123-r0)
+[2025-12-14 18:29:54] [INFO ] ( 92/180) Installing ncurses-dev (6.5_p20251123-r0)
+[2025-12-14 18:29:54] [INFO ] ( 93/180) Installing libedit (20251016.3.1-r0)
+[2025-12-14 18:29:54] [INFO ] ( 94/180) Installing libedit-dev (20251016.3.1-r0)
+[2025-12-14 18:29:54] [INFO ] ( 95/180) Installing libpcre2-16 (10.47-r0)
+[2025-12-14 18:29:54] [INFO ] ( 96/180) Installing libpcre2-32 (10.47-r0)
+[2025-12-14 18:29:54] [INFO ] ( 97/180) Installing pcre2-dev (10.47-r0)
+[2025-12-14 18:29:55] [INFO ] ( 98/180) Installing libuuid (2.41.2-r0)
+[2025-12-14 18:29:55] [INFO ] ( 99/180) Installing libfdisk (2.41.2-r0)
+[2025-12-14 18:29:55] [INFO ] (100/180) Installing liblastlog2 (2.41.2-r0)
+[2025-12-14 18:29:55] [INFO ] (101/180) Installing libsmartcols (2.41.2-r0)
+[2025-12-14 18:29:55] [INFO ] (102/180) Installing sqlite (3.51.1-r0)
+[2025-12-14 18:29:55] [INFO ] (103/180) Installing sqlite-dev (3.51.1-r0)
+[2025-12-14 18:29:55] [INFO ] (104/180) Installing util-linux-dev (2.41.2-r0)
+[2025-12-14 18:29:55] [INFO ] (105/180) Installing glib-dev (2.86.3-r0)
+[2025-12-14 18:29:55] [INFO ] (106/180) Installing cairo-dev (1.18.4-r0)
+[2025-12-14 18:29:55] [INFO ] (107/180) Installing c-ares (1.34.6-r0)
+[2025-12-14 18:29:55] [INFO ] (108/180) Installing libidn2 (2.3.8-r0)
+[2025-12-14 18:29:55] [INFO ] (109/180) Installing nghttp2-libs (1.68.0-r0)
+[2025-12-14 18:29:55] [INFO ] (110/180) Installing nghttp3 (1.13.1-r0)
+[2025-12-14 18:29:55] [INFO ] (111/180) Installing libpsl (0.21.5-r3)
+[2025-12-14 18:29:55] [INFO ] (112/180) Installing zstd-libs (1.5.7-r2)
+[2025-12-14 18:29:55] [INFO ] (113/180) Installing libcurl (8.17.0-r1)
+[2025-12-14 18:29:55] [INFO ] (114/180) Installing curl (8.17.0-r1)
+[2025-12-14 18:29:55] [INFO ] (115/180) Installing dos2unix (7.5.3-r0)
+[2025-12-14 18:29:55] [INFO ] (116/180) Installing eudev-libs (3.2.14-r6)
+[2025-12-14 18:29:55] [INFO ] (117/180) Installing eudev-dev (3.2.14-r6)
+[2025-12-14 18:29:55] [INFO ] (118/180) Installing libstdc++-dev (15.2.0-r2)
+[2025-12-14 18:29:56] [INFO ] (119/180) Installing jansson (2.14.1-r0)
+[2025-12-14 18:29:56] [INFO ] (120/180) Installing binutils (2.45.1-r0)
+[2025-12-14 18:29:56] [INFO ] (121/180) Installing libatomic (15.2.0-r2)
+[2025-12-14 18:29:56] [INFO ] (122/180) Installing gmp (6.3.0-r4)
+[2025-12-14 18:29:56] [INFO ] (123/180) Installing isl26 (0.26-r1)
+[2025-12-14 18:29:56] [INFO ] (124/180) Installing mpfr4 (4.2.2-r0)
+[2025-12-14 18:29:56] [INFO ] (125/180) Installing mpc1 (1.3.1-r1)
+[2025-12-14 18:29:56] [INFO ] (126/180) Installing gcc (15.2.0-r2)
+[2025-12-14 18:30:02] [INFO ] (127/180) Installing musl-dev (1.2.5-r21)
+[2025-12-14 18:30:02] [INFO ] (128/180) Installing g++ (15.2.0-r2)
+[2025-12-14 18:30:03] [INFO ] (129/180) Installing giflib (5.2.2-r1)
+[2025-12-14 18:30:03] [INFO ] (130/180) Installing giflib-dev (5.2.2-r1)
+[2025-12-14 18:30:03] [INFO ] (131/180) Installing git (2.52.0-r0)
+[2025-12-14 18:30:04] [INFO ] (132/180) Installing git-init-template (2.52.0-r0)
+[2025-12-14 18:30:04] [INFO ] (133/180) Installing perl-error (0.17030-r0)
+[2025-12-14 18:30:04] [INFO ] (134/180) Installing perl-git (2.52.0-r0)
+[2025-12-14 18:30:04] [INFO ] (135/180) Installing git-perl (2.52.0-r0)
+[2025-12-14 18:30:04] [INFO ] (136/180) Installing libjpeg-turbo (3.1.2-r0)
+[2025-12-14 18:30:04] [INFO ] (137/180) Installing libturbojpeg (3.1.2-r0)
+[2025-12-14 18:30:04] [INFO ] (138/180) Installing libjpeg-turbo-dev (3.1.2-r0)
+[2025-12-14 18:30:04] [INFO ] (139/180) Installing jpeg-dev (9f-r0)
+(140/180) Installing oniguruma (6.9.10-r0)
+[2025-12-14 18:30:04] [INFO ] (141/180) Installing jq (1.8.1-r0)
+[2025-12-14 18:30:04] [INFO ] (142/180) Installing libusb (1.0.29-r0)
+[2025-12-14 18:30:04] [INFO ] (143/180) Installing libusb-dev (1.0.29-r0)
+[2025-12-14 18:30:04] [INFO ] (144/180) Installing make (4.4.1-r3)
+[2025-12-14 18:30:04] [INFO ] (145/180) Installing openssh-keygen (10.2_p1-r0)
+[2025-12-14 18:30:04] [INFO ] (146/180) Installing openssh-client-common (10.2_p1-r0)
+[2025-12-14 18:30:04] [INFO ] (147/180) Installing openssh-client-default (10.2_p1-r0)
+[2025-12-14 18:30:04] [INFO ] (148/180) Installing openssh-sftp-server (10.2_p1-r0)
+[2025-12-14 18:30:04] [INFO ] (149/180) Installing openssh-server-common (10.2_p1-r0)
+[2025-12-14 18:30:04] [INFO ] (150/180) Installing openssh-server (10.2_p1-r0)
+[2025-12-14 18:30:04] [INFO ] (151/180) Installing openssh (10.2_p1-r0)
+[2025-12-14 18:30:04] [INFO ] (152/180) Installing openssl (3.5.4-r0)
+[2025-12-14 18:30:04] [INFO ] (153/180) Installing libxft (2.3.9-r0)
+[2025-12-14 18:30:04] [INFO ] (154/180) Installing graphite2 (1.3.14-r6)
+[2025-12-14 18:30:04] [INFO ] (155/180) Installing harfbuzz (12.2.0-r0)
+[2025-12-14 18:30:04] [INFO ] (156/180) Installing fribidi (1.0.16-r2)
+[2025-12-14 18:30:05] [INFO ] (157/180) Installing pango (1.56.4-r0)
+[2025-12-14 18:30:05] [INFO ] (158/180) Installing pango-tools (1.56.4-r0)
+[2025-12-14 18:30:05] [INFO ] (159/180) Installing fribidi-dev (1.0.16-r2)
+[2025-12-14 18:30:05] [INFO ] (160/180) Installing harfbuzz-cairo (12.2.0-r0)
+[2025-12-14 18:30:05] [INFO ] (161/180) Installing harfbuzz-gobject (12.2.0-r0)
+[2025-12-14 18:30:05] [INFO ] (162/180) Installing icu-data-en (76.1-r1)
+[2025-12-14 18:30:05] [INFO ]   Executing icu-data-en-76.1-r1.post-install
+[2025-12-14 18:30:05] [INFO ] [91m  *
+  * If you need ICU with non-English locales and legacy charset support, install
+  * package icu-data-full.
+  *
+[0m
+[2025-12-14 18:30:05] [INFO ] (163/180) Installing icu-libs (76.1-r1)
+[2025-12-14 18:30:05] [INFO ] (164/180) Installing harfbuzz-icu (12.2.0-r0)
+[2025-12-14 18:30:05] [INFO ] (165/180) Installing harfbuzz-subset (12.2.0-r0)
+[2025-12-14 18:30:05] [INFO ] (166/180) Installing graphite2-dev (1.3.14-r6)
+[2025-12-14 18:30:05] [INFO ] (167/180) Installing icu (76.1-r1)
+[2025-12-14 18:30:05] [INFO ] (168/180) Installing icu-dev (76.1-r1)
+[2025-12-14 18:30:05] [INFO ] (169/180) Installing harfbuzz-dev (12.2.0-r0)
+[2025-12-14 18:30:05] [INFO ] (170/180) Installing libxft-dev (2.3.9-r0)
+[2025-12-14 18:30:05] [INFO ] (171/180) Installing pango-dev (1.56.4-r0)
+[2025-12-14 18:30:05] [INFO ] (172/180) Installing libsigc++3 (3.6.0-r0)
+[2025-12-14 18:30:05] [INFO ] (173/180) Installing cairomm (1.18.0-r0)
+[2025-12-14 18:30:05] [INFO ] (174/180) Installing glibmm (2.84.0-r0)
+[2025-12-14 18:30:05] [INFO ] (175/180) Installing pangomm (2.56.1-r0)
+[2025-12-14 18:30:05] [INFO ] (176/180) Installing libsigc++3-dev (3.6.0-r0)
+[2025-12-14 18:30:05] [INFO ] (177/180) Installing cairomm-dev (1.18.0-r0)
+[2025-12-14 18:30:05] [INFO ] (178/180) Installing glibmm-dev (2.84.0-r0)
+[2025-12-14 18:30:05] [INFO ] (179/180) Installing pangomm-dev (2.56.1-r0)
+[2025-12-14 18:30:06] [INFO ] (180/180) Installing tzdata (2025c-r0)
+[2025-12-14 18:30:06] [INFO ] Executing busybox-1.37.0-r29.trigger
+[2025-12-14 18:30:06] [INFO ] Executing glib-2.86.3-r0.trigger
+[2025-12-14 18:30:06] [INFO ] * No schema files found: doing nothing.
+[2025-12-14 18:30:06] [INFO ] OK: 476 MiB in 198 packages
+[2025-12-14 18:30:17] [INFO ]  ---> Removed intermediate container e5b987ca42c4
+[2025-12-14 18:30:17] [INFO ]  ---> 5a56af5ac047
+[2025-12-14 18:30:17] [INFO ] Step 4/29 : ENV TZ=UTC
+[2025-12-14 18:30:17] [INFO ]
+[2025-12-14 18:30:17] [INFO ]  ---> Running in 83d27134eeab
+[2025-12-14 18:30:17] [INFO ]  ---> Removed intermediate container 83d27134eeab
+[2025-12-14 18:30:17] [INFO ]  ---> c8428e22de63
+[2025-12-14 18:30:17] [INFO ] Step 5/29 : RUN  echo "phase - 2 point - hint(cloning github repo)" &&  mkdir -p /pxxl &&   echo "5117b629-1612-416a-b482-1f9b0698ace0cmbteytou00011owr1z8boebn" > /pxxl/key.txt &&   ENC=$(curl -s "https://gateway.pxxl.dev/api/v1/user/projects/5117b629-1612-416a-b482-1f9b0698ace0/github/clone") &&   if echo "$ENC" | grep -q ":"; then     SECRET=$(cat /pxxl/key.txt) &&     KEY_HEX=$(printf '%s' "$SECRET" | openssl dgst -sha256 -binary | xxd -p | tr -d '\n' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]') &&     IV=$(printf '%s' "$ENC" | cut -d':' -f1 | tr -d '\r\n' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]') &&     CIPH=$(printf '%s' "$ENC" | cut -d':' -f2- | tr -d '\r\n' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]') &&     if ! printf '%s' "$KEY_HEX" | grep -Eq '^[0-9a-f]{64}$'; then echo "error: bad KEY_HEX length or non-hex characters" >&2; exit 1; fi &&     if ! printf '%s' "$IV" | grep -Eq '^[0-9a-f]{32}$'; then echo "error: Unable to Decrypt Github Credentials, Please contact support" >&2; exit 1; fi &&     if ! printf '%s' "$CIPH" | grep -Eq '^[0-9a-f]+'; then echo "error: ciphertext contains non-hex characters or is empty" >&2; exit 1; fi &&     printf '%s' "$CIPH" | xxd -r -p | openssl enc -aes-256-cbc -d -K "$KEY_HEX" -iv "$IV" | sh;   else     printf '%s' "$ENC" | sh;   fi
+[2025-12-14 18:30:17] [INFO ]
+[2025-12-14 18:30:17] [INFO ]  ---> Running in d3671c74e952
+[2025-12-14 18:30:17] [INFO ] phase - 2 point - hint(cloning github repo)
+[2025-12-14 18:30:17] [INFO ] Cloning repository for node runtime
+Branch: main
+[2025-12-14 18:30:17] [INFO ] Using port: 3000
+[2025-12-14 18:30:17] [INFO ] [91mCloning into '/app'...
+[0m
+[2025-12-14 18:30:23] [INFO ] Repository cloned successfully from https://github.com/ikwerre-dev/portfolio
+[2025-12-14 18:30:25] [INFO ]  ---> Removed intermediate container d3671c74e952
+[2025-12-14 18:30:25] [INFO ]  ---> ef61466ece83
+[2025-12-14 18:30:25] [INFO ] Step 6/29 : RUN mkdir -p /pxxl &&   echo "5117b629-1612-416a-b482-1f9b0698ace0cmbteytou00011owr1z8boebn" > /pxxl/key.txt &&   ENC=$(curl -s "https://gateway.pxxl.dev/api/v1/user/projects/5117b629-1612-416a-b482-1f9b0698ace0/env/public") &&   if echo "$ENC" | grep -q ":"; then     SECRET=$(cat /pxxl/key.txt) &&     KEY_HEX=$(printf '%s' "$SECRET" | openssl dgst -sha256 -binary | xxd -p | tr -d '\n' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]') &&     IV=$(printf '%s' "$ENC" | cut -d':' -f1 | tr -d '\r\n' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]') &&     CIPH=$(printf '%s' "$ENC" | cut -d':' -f2- | tr -d '\r\n' | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]') &&     if ! printf '%s' "$KEY_HEX" | grep -Eq '^[0-9a-f]{64}$'; then echo "error: Unable to Decrpyt ENV, Please contact support" >&2; exit 1; fi &&     if ! printf '%s' "$IV" | grep -Eq '^[0-9a-f]{32}$'; then echo "error: bad IV length or non-hex characters" >&2; exit 1; fi &&     if ! printf '%s' "$CIPH" | grep -Eq '^[0-9a-f]+'; then echo "error: ciphertext contains non-hex characters or is empty" >&2; exit 1; fi &&     printf '%s' "$CIPH" | xxd -r -p | openssl enc -aes-256-cbc -d -K "$KEY_HEX" -iv "$IV" | sh;   else     printf '%s' "$ENC" | sh;   fi
+[2025-12-14 18:30:25] [INFO ]
+[2025-12-14 18:30:26] [INFO ]  ---> Running in 3d9a40e8911f
+[2025-12-14 18:30:26] [INFO ] Created new .env file
+[2025-12-14 18:30:26] [INFO ] Environment variables updated successfully
+[2025-12-14 18:30:26] [INFO ]  ---> Removed intermediate container 3d9a40e8911f
+[2025-12-14 18:30:26] [INFO ]  ---> 473526feb7d9
+[2025-12-14 18:30:26] [INFO ] Step 7/29 : RUN cd /app && if [ -f next.config.ts ]; then   echo "Found next.config.ts, checking content...";   echo "=== Original next.config.ts content ===";   cat next.config.ts || echo "File is empty or unreadable";   echo "=== End of original content ===";   cp next.config.ts next.config.ts.backup;   if [ ! -s next.config.ts ] || ! grep -q "nextConfig" next.config.ts; then     echo "File is empty or has no nextConfig, creating new content...";     echo "import type { NextConfig } from 'next'" > next.config.ts;     echo "" >> next.config.ts;     echo "const nextConfig: NextConfig = {" >> next.config.ts;     echo "  typescript: { ignoreBuildErrors: true }," >> next.config.ts;     echo "  eslint: { ignoreDuringBuilds: true }" >> next.config.ts;     echo "};" >> next.config.ts;     echo "" >> next.config.ts;     echo "export default nextConfig" >> next.config.ts;   else     echo "File has content, modifying existing config...";     if ! grep -q "typescript.*ignoreBuildErrors" next.config.ts; then       sed -i '/const nextConfig.*{/a\  typescript: { ignoreBuildErrors: true },' next.config.ts;     fi;     if ! grep -q "eslint.*ignoreDuringBuilds" next.config.ts; then       sed -i '/const nextConfig.*{/a\  eslint: { ignoreDuringBuilds: true },' next.config.ts;     fi;     sed -i 's/ignoreBuildErrors:.*false/ignoreBuildErrors: true/g' next.config.ts;     sed -i 's/ignoreDuringBuilds:.*false/ignoreDuringBuilds: true/g' next.config.ts;   fi;   echo "=== Modified next.config.ts content ===";   cat next.config.ts;   echo "=== End of modified content ==="; elif [ -f next.config.js ]; then   echo "Found next.config.js, checking content...";   echo "=== Original next.config.js content ===";   cat next.config.js || echo "File is empty or unreadable";   echo "=== End of original content ===";   cp next.config.js next.config.js.backup;   if [ ! -s next.config.js ] || ! grep -q "module.exports\|nextConfig" next.config.js; then     echo "File is empty or has no config, creating new content...";     echo "/** @type {import('next').NextConfig} */" > next.config.js;     echo "const nextConfig = {" >> next.config.js;     echo "  typescript: { ignoreBuildErrors: true }," >> next.config.js;     echo "  eslint: { ignoreDuringBuilds: true }" >> next.config.js;     echo "};" >> next.config.js;     echo "" >> next.config.js;     echo "module.exports = nextConfig;" >> next.config.js;   else     echo "File has content, modifying existing config...";     if ! grep -q "typescript.*ignoreBuildErrors" next.config.js; then       sed -i '/module.exports.*{/a\  typescript: { ignoreBuildErrors: true },' next.config.js;     fi;     if ! grep -q "eslint.*ignoreDuringBuilds" next.config.js; then       sed -i '/module.exports.*{/a\  eslint: { ignoreDuringBuilds: true },' next.config.js;     fi;     sed -i 's/ignoreBuildErrors:.*false/ignoreBuildErrors: true/g' next.config.js;     sed -i 's/ignoreDuringBuilds:.*false/ignoreDuringBuilds: true/g' next.config.js;   fi;   echo "=== Modified next.config.js content ===";   cat next.config.js;   echo "=== End of modified content ==="; elif [ -f next.config.mjs ]; then   echo "Found next.config.mjs, checking content...";   echo "=== Original next.config.mjs content ===";   cat next.config.mjs || echo "File is empty or unreadable";   echo "=== End of original content ===";   cp next.config.mjs next.config.mjs.backup;   if [ ! -s next.config.mjs ] || ! grep -q "export default\|nextConfig" next.config.mjs; then     echo "File is empty or has no config, creating new content...";     echo "/** @type {import('next').NextConfig} */" > next.config.mjs;     echo "const nextConfig = {" >> next.config.mjs;     echo "  typescript: { ignoreBuildErrors: true }," >> next.config.mjs;     echo "  eslint: { ignoreDuringBuilds: true }" >> next.config.mjs;     echo "};" >> next.config.mjs;     echo "" >> next.config.mjs;     echo "export default nextConfig;" >> next.config.mjs;   else     echo "File has content, modifying existing config...";     if ! grep -q "typescript.*ignoreBuildErrors" next.config.mjs; then       sed -i '/export default.*{/a\  typescript: { ignoreBuildErrors: true },' next.config.mjs;     fi;     if ! grep -q "eslint.*ignoreDuringBuilds" next.config.mjs; then       sed -i '/export default.*{/a\  eslint: { ignoreDuringBuilds: true },' next.config.mjs;     fi;     sed -i 's/ignoreBuildErrors:.*false/ignoreBuildErrors: true/g' next.config.mjs;     sed -i 's/ignoreDuringBuilds:.*false/ignoreDuringBuilds: true/g' next.config.mjs;   fi;   echo "=== Modified next.config.mjs content ===";   cat next.config.mjs;   echo "=== End of modified content ==="; else   echo "No Next.js config found, creating next.config.js...";   echo "/** @type {import('next').NextConfig} */" > next.config.js;   echo "const nextConfig = {" >> next.config.js;   echo "  typescript: { ignoreBuildErrors: true }," >> next.config.js;   echo "  eslint: { ignoreDuringBuilds: true }" >> next.config.js;   echo "};" >> next.config.js;   echo "" >> next.config.js;   echo "module.exports = nextConfig;" >> next.config.js;   echo "=== Created next.config.js content ===";   cat next.config.js;   echo "=== End of created content ==="; fi
+[2025-12-14 18:30:26] [INFO ]
+[2025-12-14 18:30:26] [INFO ]  ---> Running in a005dfff65ca
+[2025-12-14 18:30:26] [INFO ] Found next.config.ts, checking content...
+=== Original next.config.ts content ===
+[2025-12-14 18:30:26] [INFO ] import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+
+  typescript: {
+    ignoreBuildErrors: true
+  },
+  eslint: {
+    ignoreDuringBuilds: true
+  },
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: '**',
+      },
+    ],
+  },
 };
 
-term.onData((data) => ws.send(data));
-window.addEventListener("resize", () => {
-  if (execId) {
-    fetch(`https://${host}/terminal/resize`, {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({ exec_id: execId, width: term.cols, height: term.rows })
-    });
-  }
-});
-</script>
-</body>
-</html>
+export default nextConfig;
+[2025-12-14 18:30:26] [INFO ] === End of original content ===
+[2025-12-14 18:30:26] [INFO ] File has content, modifying existing config...
+[2025-12-14 18:30:26] [INFO ] === Modified next.config.ts content ===
+[2025-12-14 18:30:26] [INFO ] import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  eslint: { ignoreDuringBuilds: true },
+  typescript: { ignoreBuildErrors: true },
+
+  typescript: {
+    ignoreBuildErrors: true
+  },
+  eslint: {
+    ignoreDuringBuilds: true
+  },
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: '**',
+      },
+    ],
+  },
+};
+
+export default nextConfig;
+[2025-12-14 18:30:26] [INFO ] === End of modified content ===
+[2025-12-14 18:30:27] [INFO ]  ---> Removed intermediate container a005dfff65ca
+[2025-12-14 18:30:27] [INFO ]  ---> 6fab1dc982d8
+[2025-12-14 18:30:27] [INFO ] Step 8/29 : RUN echo "phase - 3 point - hint(installing neccessary packages to run the project)"
+[2025-12-14 18:30:27] [INFO ]
+[2025-12-14 18:30:27] [INFO ]  ---> Running in deef8e9c3ab2
+[2025-12-14 18:30:27] [INFO ] phase - 3 point - hint(installing neccessary packages to run the project)
+[2025-12-14 18:30:27] [INFO ]  ---> Removed intermediate container deef8e9c3ab2
+[2025-12-14 18:30:27] [INFO ]  ---> 1236c99dc73e
+[2025-12-14 18:30:27] [INFO ] Step 9/29 : RUN set -e;   DEFAULT_INSTALL_CMD="npm install";   OV=$(grep -E '^installcommand=' /pxxl/conf.txt | head -n1 | cut -d'=' -f2-);   if [ -n "$OV" ]; then echo "Using overridden install command: $OV"; sh -lc "$OV"; else sh -lc "$DEFAULT_INSTALL_CMD"; fi
+[2025-12-14 18:30:27] [INFO ]
+[2025-12-14 18:30:27] [INFO ]  ---> Running in 3b916b4005ba
+[2025-12-14 18:30:36] [INFO ] [91mnpm warn deprecated @studio-freight/lenis@1.0.42: The '@studio-freight/lenis' package has been renamed to 'lenis'. Please update your dependencies: npm install lenis and visit the documentation: https://www.npmjs.com/package/lenis
+[0m
+[2025-12-14 18:31:02] [INFO ]
+added 561 packages, and audited 562 packages in 34s
+[2025-12-14 18:31:02] [INFO ]
+[2025-12-14 18:31:02] [INFO ] 280 packages are looking for funding
+[2025-12-14 18:31:02] [INFO ]   run `npm fund` for details
+[2025-12-14 18:31:02] [INFO ]
+10 vulnerabilities (3 low, 6 moderate, 1 critical)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+[2025-12-14 18:31:02] [INFO ] [91mnpm notice
+npm notice New minor version of npm available! 11.6.2 -> 11.7.0
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.7.0
+npm notice To update run: npm install -g npm@11.7.0
+npm notice
+[0m
+[2025-12-14 18:31:33] [INFO ]  ---> Removed intermediate container 3b916b4005ba
+[2025-12-14 18:31:33] [INFO ]  ---> d91e5a75f375
+[2025-12-14 18:31:33] [INFO ] Step 10/29 : RUN echo "phase - 4 point - hint(building the project)"
+[2025-12-14 18:31:33] [INFO ]
+[2025-12-14 18:31:33] [INFO ]  ---> Running in 17060a6086ee
+[2025-12-14 18:31:34] [INFO ] phase - 4 point - hint(building the project)
+[2025-12-14 18:31:34] [INFO ]  ---> Removed intermediate container 17060a6086ee
+[2025-12-14 18:31:34] [INFO ]  ---> d6af1415c910
+[2025-12-14 18:31:34] [INFO ] Step 11/29 : RUN set -e;   DEFAULT_BUILD_CMD="npm run build";   OV=$(grep -E '^buildcommand=' /pxxl/conf.txt | head -n1 | cut -d'=' -f2-);   if [ -n "$OV" ]; then echo "Using overridden build command: $OV"; sh -lc "$OV"; else sh -lc "$DEFAULT_BUILD_CMD"; fi
+[2025-12-14 18:31:34] [INFO ]
+[2025-12-14 18:31:34] [INFO ]  ---> Running in ec5b47f0cfb9
+[2025-12-14 18:31:34] [INFO ]
+> portfolio@0.1.0 build
+> next build
+[2025-12-14 18:31:36] [INFO ] Attention: Next.js now collects completely anonymous telemetry regarding usage.
+[2025-12-14 18:31:36] [INFO ] This information is used to shape Next.js' roadmap and prioritize features.
+You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+https://nextjs.org/telemetry
+[2025-12-14 18:31:36] [INFO ]    ▲ Next.js 15.3.1
+   - Environments: .env
+[2025-12-14 18:31:36] [INFO ]    Creating an optimized production build ...
+[2025-12-14 18:32:28] [INFO ]  ✓ Compiled successfully in 44s
+[2025-12-14 18:32:28] [INFO ]    Skipping validation of types
+   Skipping linting
+[2025-12-14 18:32:28] [INFO ]    Collecting page data ...
+[2025-12-14 18:32:33] [INFO ]    Generating static pages (0/35) ...
+[2025-12-14 18:32:34] [INFO ]    Generating static pages (8/35)
+[2025-12-14 18:32:34] [INFO ]    Generating static pages (17/35)
+[2025-12-14 18:32:34] [INFO ] [91mError fetching blog posts for sitemap: [Error: Dynamic server usage: Route /sitemap.xml couldn't be rendered statically because it used revalidate: 0 fetch https://honour.pxxl.pro/api/posts /sitemap.xml. See more info here: https://nextjs.org/docs/messages/dynamic-server-error] {
+  description: "Route /sitemap.xml couldn't be rendered statically because it used revalidate: 0 fetch https://honour.pxxl.pro/api/posts /sitemap.xml. See more info here: https://nextjs.org/docs/messages/dynamic-server-error",
+  digest: 'DYNAMIC_SERVER_USAGE'
+}
+[0m
+[2025-12-14 18:32:34] [INFO ]    Generating static pages (26/35)
+[2025-12-14 18:32:34] [INFO ]  ✓ Generating static pages (35/35)
+[2025-12-14 18:32:35] [INFO ]    Finalizing page optimization ...
+   Collecting build traces ...
+[2025-12-14 18:32:44] [INFO ]
+[2025-12-14 18:32:44] [INFO ] Route (app)                                 Size  First Load JS
+┌ ○ /                                    5.32 kB         171 kB
+├ ○ /_not-found                            177 B         102 kB
+├ ○ /about                               3.38 kB         156 kB
+├ ○ /admin                                 925 B         139 kB
+├ ○ /admin/analytics                       693 B         139 kB
+├ ○ /admin/blog                          1.53 kB         144 kB
+├ ƒ /admin/blog/edit/[id]                2.65 kB         109 kB
+├ ○ /admin/blog/new                      2.34 kB         104 kB
+├ ○ /admin/dashboard                     69.3 kB         208 kB
+├ ƒ /api/analytics                         177 B         102 kB
+├ ƒ /api/analytics/page-views              177 B         102 kB
+├ ƒ /api/contact                           177 B         102 kB
+├ ƒ /api/github-stats                      177 B         102 kB
+├ ƒ /api/posts                             177 B         102 kB
+├ ƒ /api/posts/[id]                        177 B         102 kB
+├ ƒ /api/views                             177 B         102 kB
+├ ○ /beg                                   22 kB         165 kB
+├ ○ /blog                                3.85 kB         157 kB
+├ ƒ /blog/[id]                            279 kB         432 kB
+├ ○ /github                              3.29 kB         155 kB
+├ ○ /projects                              757 B         130 kB
+├ ● /projects/[id]                       3.46 kB         157 kB
+├   ├ /projects/pxxl
+├   ├ /projects/olamide
+├   ├ /projects/uncutxtra-vote
+├   └ [+10 more paths]
+└ ƒ /sitemap.xml                           177 B         102 kB
++ First Load JS shared by all             102 kB
+  ├ chunks/1684-27f4f5891c2b1eb0.js      46.4 kB
+  ├ chunks/4bd1b696-feb8e941c19ce9a8.js  53.2 kB
+  └ other shared chunks (total)          2.48 kB
+[2025-12-14 18:32:44] [INFO ] ○  (Static)   prerendered as static content
+●  (SSG)      prerendered as static HTML (uses generateStaticParams)
+ƒ  (Dynamic)  server-rendered on demand
+[2025-12-14 18:32:51] [INFO ]  ---> Removed intermediate container ec5b47f0cfb9
+[2025-12-14 18:32:51] [INFO ]  ---> 93876e36cb0d
+[2025-12-14 18:32:51] [INFO ] Step 12/29 : RUN echo "=== Cleaning up development dependencies ==="     && if [ -f package.json ]; then npm prune --omit=dev --ignore-scripts || true; else echo "Skipping npm prune (no package.json)"; fi     && echo "=== Removing build caches ==="     && rm -rf node_modules/.cache     && rm -rf .next/cache     && echo "=== Clearing package manager caches ==="
+[2025-12-14 18:32:51] [INFO ]
+[2025-12-14 18:32:51] [INFO ]  ---> Running in 4fa1901c312d
+[2025-12-14 18:32:51] [INFO ] === Cleaning up development dependencies ===
+[2025-12-14 18:33:28] [INFO ]
+removed 292 packages, and audited 270 packages in 37s
+
+152 packages are looking for funding
+[2025-12-14 18:33:28] [INFO ]   run `npm fund` for details
+[2025-12-14 18:33:28] [INFO ]
+6 vulnerabilities (5 moderate, 1 critical)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+[2025-12-14 18:33:28] [INFO ] === Removing build caches ===
+[2025-12-14 18:33:28] [INFO ] === Clearing package manager caches ===
+[2025-12-14 18:33:29] [INFO ]  ---> Removed intermediate container 4fa1901c312d
+[2025-12-14 18:33:29] [INFO ]  ---> 7a6d773e4853
+[2025-12-14 18:33:29] [INFO ] Step 13/29 : RUN set -e; cd /app; mkdir -p /pxxl/export; for p in .next node_modules package.json public next.config.js next.config.ts next.config.mjs .env yarn.lock pnpm-lock.yaml bun.lockb package-lock.json .yarnrc.yml .npmrc .yarn .pnp.cjs .pnp.loader.mjs; do   if [ -e "$p" ]; then cp -r "$p" /pxxl/export/; fi; done
+[2025-12-14 18:33:29] [INFO ]
+[2025-12-14 18:33:29] [INFO ]  ---> Running in ee6bf3259855
+[2025-12-14 18:33:57] [INFO ]  ---> Removed intermediate container ee6bf3259855
+[2025-12-14 18:33:57] [INFO ]  ---> 170b57cf5b55
+[2025-12-14 18:33:57] [INFO ] Step 14/29 : RUN ls -la /pxxl/export/
+[2025-12-14 18:33:57] [INFO ]
+[2025-12-14 18:33:57] [INFO ]  ---> Running in c9debd50605c
+[2025-12-14 18:33:57] [INFO ] total 372
+[2025-12-14 18:33:57] [INFO ] drwxr-xr-x    5 root     root          4096 Dec 14 18:33 .
+drwxr-xr-x    1 root     root          4096 Dec 14 18:33 ..
+-rw-r--r--    1 root     root           399 Dec 14 18:33 .env
+drwxr-xr-x    6 root     root          4096 Dec 14 18:33 .next
+-rw-r--r--    1 root     root           398 Dec 14 18:33 next.config.ts
+drwxr-xr-x  232 root     root         12288 Dec 14 18:33 node_modules
+-rw-r--r--    1 root     root        338136 Dec 14 18:33 package-lock.json
+-rw-r--r--    1 root     root          1435 Dec 14 18:33 package.json
+drwxr-xr-x    2 root     root          4096 Dec 14 18:33 public
+[2025-12-14 18:33:57] [INFO ]  ---> Removed intermediate container c9debd50605c
+[2025-12-14 18:33:57] [INFO ]  ---> 690b300d6c59
+[2025-12-14 18:33:57] [INFO ] {'aux': {'ID': 'sha256:690b300d6c59e73b89e47f7c51f2ddca94271711792fc23bf216dd683fe687af'}}
+[2025-12-14 18:33:57] [INFO ] Step 15/29 : FROM node:24-alpine AS runner
+[2025-12-14 18:33:57] [INFO ]
+[2025-12-14 18:33:58] [INFO ] Pulling from library/node
+[2025-12-14 18:33:58] [INFO ] Digest: sha256:7e0bd0460b26eb3854ea5b99b887a6a14d665d14cae694b78ae2936d14b2befb
+[2025-12-14 18:33:58] [INFO ] Status: Downloaded newer image for node:24-alpine
+[2025-12-14 18:33:58] [INFO ]  ---> fe065ce6eeba
+[2025-12-14 18:33:58] [INFO ] Step 16/29 : WORKDIR /app
+[2025-12-14 18:33:58] [INFO ]
+[2025-12-14 18:33:58] [INFO ]  ---> Running in de5a08290e71
+[2025-12-14 18:33:58] [INFO ]  ---> Removed intermediate container de5a08290e71
+[2025-12-14 18:33:58] [INFO ]  ---> 92c746bd330e
+[2025-12-14 18:33:58] [INFO ] Step 17/29 : RUN echo "phase - 5 point - hint(setting up production environment)" &&     apk add --no-cache     openssl     curl     bash     make     g++     linux-headers     libc-dev     tzdata
+[2025-12-14 18:33:58] [INFO ]
+[2025-12-14 18:33:59] [INFO ]  ---> Running in 4874adae6f38
+[2025-12-14 18:33:59] [INFO ] phase - 5 point - hint(setting up production environment)
+[2025-12-14 18:34:00] [INFO ] ( 1/30) Installing ncurses-terminfo-base (6.5_p20251123-r0)
+[2025-12-14 18:34:00] [INFO ] ( 2/30) Installing libncursesw (6.5_p20251123-r0)
+[2025-12-14 18:34:00] [INFO ] ( 3/30) Installing readline (8.3.1-r0)
+[2025-12-14 18:34:00] [INFO ] ( 4/30) Installing bash (5.3.3-r1)
+[2025-12-14 18:34:00] [INFO ]   Executing bash-5.3.3-r1.post-install
+[2025-12-14 18:34:00] [INFO ] ( 5/30) Installing brotli-libs (1.2.0-r0)
+[2025-12-14 18:34:00] [INFO ] ( 6/30) Installing c-ares (1.34.6-r0)
+[2025-12-14 18:34:00] [INFO ] ( 7/30) Installing libunistring (1.4.1-r0)
+[2025-12-14 18:34:00] [INFO ] ( 8/30) Installing libidn2 (2.3.8-r0)
+[2025-12-14 18:34:00] [INFO ] ( 9/30) Installing nghttp2-libs (1.68.0-r0)
+[2025-12-14 18:34:00] [INFO ] (10/30) Installing nghttp3 (1.13.1-r0)
+[2025-12-14 18:34:00] [INFO ] (11/30) Installing libpsl (0.21.5-r3)
+[2025-12-14 18:34:00] [INFO ] (12/30) Installing zstd-libs (1.5.7-r2)
+[2025-12-14 18:34:00] [INFO ] (13/30) Installing libcurl (8.17.0-r1)
+[2025-12-14 18:34:00] [INFO ] (14/30) Installing curl (8.17.0-r1)
+[2025-12-14 18:34:00] [INFO ] (15/30) Installing libstdc++-dev (15.2.0-r2)
+[2025-12-14 18:34:00] [INFO ] (16/30) Installing jansson (2.14.1-r0)
+[2025-12-14 18:34:00] [INFO ] (17/30) Installing binutils (2.45.1-r0)
+[2025-12-14 18:34:00] [INFO ] (18/30) Installing libgomp (15.2.0-r2)
+[2025-12-14 18:34:00] [INFO ] (19/30) Installing libatomic (15.2.0-r2)
+[2025-12-14 18:34:00] [INFO ] (20/30) Installing gmp (6.3.0-r4)
+[2025-12-14 18:34:00] [INFO ] (21/30) Installing isl26 (0.26-r1)
+[2025-12-14 18:34:00] [INFO ] (22/30) Installing mpfr4 (4.2.2-r0)
+[2025-12-14 18:34:00] [INFO ] (23/30) Installing mpc1 (1.3.1-r1)
+[2025-12-14 18:34:00] [INFO ] (24/30) Installing gcc (15.2.0-r2)
+[2025-12-14 18:34:04] [INFO ] (25/30) Installing musl-dev (1.2.5-r21)
+[2025-12-14 18:34:04] [INFO ] (26/30) Installing g++ (15.2.0-r2)
+[2025-12-14 18:34:07] [INFO ] (27/30) Installing linux-headers (6.16.12-r0)
+[2025-12-14 18:34:07] [INFO ] (28/30) Installing make (4.4.1-r3)
+[2025-12-14 18:34:07] [INFO ] (29/30) Installing openssl (3.5.4-r0)
+[2025-12-14 18:34:07] [INFO ] (30/30) Installing tzdata (2025c-r0)
+[2025-12-14 18:34:07] [INFO ] Executing busybox-1.37.0-r29.trigger
+[2025-12-14 18:34:07] [INFO ] OK: 278 MiB in 48 packages
+[2025-12-14 18:34:13] [INFO ]  ---> Removed intermediate container 4874adae6f38
+[2025-12-14 18:34:13] [INFO ]  ---> 6c7ac211c685
+[2025-12-14 18:34:13] [INFO ] Step 18/29 : RUN cp /usr/share/zoneinfo/UTC /etc/localtime && echo "UTC" > /etc/timezone
+[2025-12-14 18:34:13] [INFO ]
+[2025-12-14 18:34:13] [INFO ]  ---> Running in 91d281a73a56
+[2025-12-14 18:34:13] [INFO ]  ---> Removed intermediate container 91d281a73a56
+[2025-12-14 18:34:13] [INFO ]  ---> 1bec72273514
+[2025-12-14 18:34:13] [INFO ] Step 19/29 : ENV TZ=UTC
+[2025-12-14 18:34:13] [INFO ]
+[2025-12-14 18:34:13] [INFO ]  ---> Running in 46a21e32742f
+[2025-12-14 18:34:13] [INFO ]  ---> Removed intermediate container 46a21e32742f
+[2025-12-14 18:34:13] [INFO ]  ---> 32a43f718690
+[2025-12-14 18:34:13] [INFO ] Step 20/29 : RUN echo "phase - 6 point - hint(copying required files and finalizing the production environment)"
+[2025-12-14 18:34:13] [INFO ]
+[2025-12-14 18:34:13] [INFO ]  ---> Running in f7028cb81aa0
+[2025-12-14 18:34:14] [INFO ] phase - 6 point - hint(copying required files and finalizing the production environment)
+[2025-12-14 18:34:14] [INFO ]  ---> Removed intermediate container f7028cb81aa0
+[2025-12-14 18:34:14] [INFO ]  ---> ad40fef84414
+[2025-12-14 18:34:14] [INFO ] Step 21/29 : COPY --from=builder /pxxl/export/. ./
+[2025-12-14 18:34:14] [INFO ]
+[2025-12-14 18:34:14] [ERROR] invalid from flag value builder: No such image: sha256:690b300d6c59e73b89e47f7c51f2ddca94271711792fc23bf216dd683fe687af
+[2025-12-14 18:34:14] build error invalid from flag value builder: No such image: sha256:690b300d6c59e73b89e47f7c51f2ddca94271711792fc23bf216dd683fe687af app_id=e34b7261-09dc-44cd-857c-8760a55724e9
+[FAILED] stage=building reason=Build reported failure
