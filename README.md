@@ -204,15 +204,3 @@ This API manages Docker images and containers, streams logs for long-running tas
 - Set `API_SECRET` in your environment or copy `.env.example` and adjust the value. When set, all HTTP requests to this API must include header `X-API-SECRET` matching the environment value.
 - Outgoing requests from this service automatically include `X-API-SECRET` when `API_SECRET` is set.
 
-Example:
-
-```
-export API_SECRET=8a541b3f04b04fe7182d2e798c5a6ea1a4857481e52af1d2a52f11626f0c5a41
-uvicorn main:app --host 0.0.0.0 --port 8002 --ws wsproto --reload
-```
-
-Client requests must send:
-
-```
-curl -H "X-API-SECRET: $API_SECRET" http://localhost:8002/docker/container/list
-```
