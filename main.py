@@ -980,6 +980,22 @@ class TaskRunStreamRequest(BaseModel):
     env: Optional[Dict[str, str]] = None
     task_id: Optional[str] = None
 
+class ContainerLsRequest(BaseModel):
+    container: str
+    path: Optional[str] = "/"
+
+class ContainerDuRequest(BaseModel):
+    container: str
+    path: Optional[str] = "/"
+
+class ContainerLsDetailedRequest(BaseModel):
+    container: str
+    path: Optional[str] = "/"
+    include_sizes: Optional[bool] = True
+
+class ContainerInspectRequest(BaseModel):
+    container: str
+
 @app.post("/docker/build-stream")
 def docker_build_stream(req: BuildStreamRequest):
     try:
@@ -997,6 +1013,50 @@ def docker_build_stream(req: BuildStreamRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/docker/container/ls")
+def docker_container_ls(req: ContainerLsRequest):
+    try:
+        res = ds.ls_in_container(req.container, req.path or "/")
+        return res
+    except Exception as e:
+        msg = str(e)
+        if "No such container" in msg or "not found" in msg.lower():
+            raise HTTPException(status_code=404, detail="container not found")
+        raise HTTPException(status_code=500, detail=msg)
+
+@app.post("/docker/container/du")
+def docker_container_du(req: ContainerDuRequest):
+    try:
+        res = ds.du_in_container(req.container, req.path or "/")
+        return res
+    except Exception as e:
+        msg = str(e)
+        if "No such container" in msg or "not found" in msg.lower():
+            raise HTTPException(status_code=404, detail="container not found")
+        raise HTTPException(status_code=500, detail=msg)
+
+@app.post("/docker/container/ls-detailed")
+def docker_container_ls_detailed(req: ContainerLsDetailedRequest):
+    try:
+        res = ds.ls_detailed_in_container(req.container, req.path or "/", include_sizes=bool(req.include_sizes))
+        return res
+    except Exception as e:
+        msg = str(e)
+        if "No such container" in msg or "not found" in msg.lower():
+            raise HTTPException(status_code=404, detail="container not found")
+        raise HTTPException(status_code=500, detail=msg)
+
+@app.post("/docker/container/inspect")
+def docker_container_inspect(req: ContainerInspectRequest):
+    try:
+        res = ds.inspect_container_details(req.container)
+        return res
+    except Exception as e:
+        msg = str(e)
+        if "No such container" in msg or "not found" in msg.lower():
+            raise HTTPException(status_code=404, detail="container not found")
+        raise HTTPException(status_code=500, detail=msg)
 
 @app.post("/tasks/run-stream")
 def tasks_run_stream(req: TaskRunStreamRequest):
