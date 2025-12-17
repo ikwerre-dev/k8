@@ -228,6 +228,28 @@ def list_volumes() -> list:
     return [v.name for v in client.volumes.list()]
 
 
+def inspect_volume(name: str) -> Dict[str, Any]:
+    client = get_client()
+    try:
+        v = client.volumes.get(name)
+    except Exception as e:
+        msg = str(e)
+        return {"status": "not_found", "name": name, "error": msg}
+
+    attrs = v.attrs if isinstance(getattr(v, "attrs", None), dict) else {}
+    return {
+        "status": "ok",
+        "name": v.name,
+        "driver": attrs.get("Driver"),
+        "mountpoint": attrs.get("Mountpoint"),
+        "created_at": attrs.get("CreatedAt"),
+        "scope": attrs.get("Scope"),
+        "labels": attrs.get("Labels") or {},
+        "options": attrs.get("Options") or {},
+        "attrs": attrs,
+    }
+
+
 def remove_volume(name: str, force: bool = False) -> dict:
     client = get_client()
     v = client.volumes.get(name)
@@ -1476,7 +1498,7 @@ def delete_volume_with_attachment_check(volume_name: str, force: bool = False) -
         }
 
 
-def clear_volume_contents(volume_name: str) -> Dict[str, Any]:
+def clear_volume_contents(volume_name: str, force: bool = False) -> Dict[str, Any]:
     """
     Clear all files from a named Docker volume without stopping containers.
 
@@ -1497,12 +1519,19 @@ def clear_volume_contents(volume_name: str) -> Dict[str, Any]:
             "volume_name": volume_name,
         }
 
-    # Optional: provide info about running containers using this volume
     attachment_info = {}
     try:
         attachment_info = check_volume_attached_to_running_containers(volume_name)
     except Exception as e:
         attachment_info = {"error": str(e)}
+
+    if attachment_info.get("attached") and (not force):
+        return {
+            "status": "attached_to_running_containers",
+            "message": f"Volume '{volume_name}' is attached to {attachment_info.get('count')} running container(s)",
+            "volume_name": volume_name,
+            "attached_containers": attachment_info.get("containers") or [],
+        }
 
     # Use an ephemeral Alpine container to clear the volume contents
     # The find-based approach reliably handles hidden files and nested dirs.
