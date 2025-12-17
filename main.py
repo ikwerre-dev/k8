@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import HTMLResponse
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Any
 import os
 import time
 import threading
@@ -140,6 +140,12 @@ class RunRequest(BaseModel):
     app_id: Optional[str] = None  # app identifier for container naming
     task_id: Optional[str] = None  # task identifier for container naming
 
+class VolumeItem(BaseModel):
+    name: str
+    mount_path: str
+    mode: Optional[str] = "rw"
+    limit_mb: Optional[int] = None
+
 class LocalRunRequest(BaseModel):
     lz4_path: str  # local relative path to .lz4 (or .tar.lz4)
     task_id: str  # task/build id used for logging dir
@@ -156,6 +162,7 @@ class LocalRunRequest(BaseModel):
     volume_name: Optional[str] = None
     mount_path: Optional[str] = None
     mode: Optional[str] = "rw"
+    volumes: Optional[List[VolumeItem]] = None
 
 # --- Network management --- 
 class NetworkCreateRequest(BaseModel):
@@ -2031,7 +2038,11 @@ def build_delete(req: BuildDeleteRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 class VolumeCreateRequest(BaseModel):
-    name: str
+    task_id: str
+    volume_name: str
+    mount_path: str
+    mode: str
+    limit_mb: Optional[int] = None
     driver: Optional[str] = "local"
     labels: Optional[Dict[str, str]] = None
 
@@ -2045,7 +2056,48 @@ def docker_container_list(all: Optional[bool] = False):
 @app.post("/docker/volume/create")
 def docker_volume_create(req: VolumeCreateRequest):
     try:
-        return ds.create_volume(req.name, driver=req.driver or "local", labels=req.labels)
+        # Create the volume
+        vol_res = ds.create_volume(req.volume_name, driver=req.driver or "local", labels=req.labels)
+        
+        # Set limit if provided
+        limit_res = None
+        if req.limit_mb is not None:
+             limit_kb = int(req.limit_mb) * 1024
+             limit_res = ds.set_volume_limit(req.task_id, req.volume_name, req.mount_path, limit_kb)
+        
+        # Resolve container from task_id
+        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
+        summary_path = os.path.join(builds_dir, "build.info.json")
+        cid = None
+        if os.path.exists(summary_path):
+            with open(summary_path, "r") as f:
+                summary_obj = json.load(f)
+            cid = summary_obj.get("container_name") or summary_obj.get("container_id")
+            if not cid:
+                upstream = (summary_obj.get("upstream", {}) or {})
+                cid = upstream.get("upstream_host")
+        
+        if not cid:
+            # Try to infer from app_id if task_id didn't yield a container
+            pass
+
+        if cid:
+             # Attach volume by recreating container
+             recreate_res = ds.recreate_with_added_volume(cid, req.volume_name, req.mount_path, req.mode)
+             return {
+                 "status": "ok", 
+                 "volume": vol_res, 
+                 "limit": limit_res, 
+                 "container": recreate_res
+             }
+        else:
+             return {
+                 "status": "ok", 
+                 "volume": vol_res, 
+                 "limit": limit_res, 
+                 "message": "Container not found for task_id, volume created but not attached"
+             }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
