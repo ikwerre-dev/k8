@@ -529,6 +529,7 @@ def local_run_from_lz4(
     volume_name: Optional[str] = None,
     mount_path: Optional[str] = None,
     mode: Optional[str] = "rw",
+    volumes: Optional[List[Dict[str, Any]]] = None,
     labels: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Decompress a .tar.lz4, load docker image, and run container.
@@ -788,16 +789,42 @@ def local_run_from_lz4(
         except Exception:
             pass
         # Prepare optional persistent volume
-        volumes_arg = None
+        volumes_arg = {}
+        
+        all_volumes = []
+        if volumes:
+            all_volumes.extend(volumes)
         if volume_name and mount_path:
-            try:
-                client.volumes.get(volume_name)
-            except Exception:
+             all_volumes.append({
+                 "name": volume_name, 
+                 "mount_path": mount_path, 
+                 "mode": mode or "rw",
+                 "limit_mb": None
+             })
+             
+        for vol in all_volumes:
+            v_name = vol.get("name")
+            v_path = vol.get("mount_path")
+            v_mode = vol.get("mode") or "rw"
+            v_limit_mb = vol.get("limit_mb")
+            
+            if v_name and v_path:
                 try:
-                    client.volumes.create(name=volume_name)
+                    client.volumes.get(v_name)
                 except Exception:
-                    pass
-            volumes_arg = {volume_name: {"bind": mount_path, "mode": (mode or "rw")}}
+                    try:
+                        client.volumes.create(name=v_name)
+                    except Exception:
+                        pass
+                
+                if v_limit_mb is not None:
+                    try:
+                        limit_kb = int(v_limit_mb) * 1024
+                        set_volume_limit(task_id, v_name, v_path, limit_kb)
+                    except Exception:
+                        pass
+                
+                volumes_arg[v_name] = {"bind": v_path, "mode": v_mode}
 
         run_res = run_container_extended(
             image=image_id or (image_tag or ''),
