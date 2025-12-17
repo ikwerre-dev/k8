@@ -2064,10 +2064,9 @@ def docker_volume_create(req: VolumeCreateRequest):
         if req.limit_mb is not None:
              limit_kb = int(req.limit_mb) * 1024
              limit_res = ds.set_volume_limit(req.task_id, req.volume_name, req.mount_path, limit_kb)
-        
+         
         # Resolve container from task_id
-        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
-        summary_path = os.path.join(builds_dir, "build.info.json")
+        summary_path, builds_dir = _resolve_summary_path(req.task_id)
         cid = None
         if os.path.exists(summary_path):
             with open(summary_path, "r") as f:
@@ -2126,8 +2125,7 @@ def docker_volume_detach(req: VolumeDetachRequest):
     and provides information about alternative approaches.
     """
     try:
-        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
-        summary_path = os.path.join(builds_dir, "build.info.json")
+        summary_path, builds_dir = _resolve_summary_path(req.task_id)
         if not os.path.exists(summary_path):
             raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
         with open(summary_path, "r") as f:
@@ -2165,8 +2163,7 @@ def docker_volume_detach(req: VolumeDetachRequest):
 @app.post("/docker/container/volume/remove")
 def docker_volume_remove(req: VolumeRemoveRequest):
     try:
-        builds_dir = os.path.join(os.path.dirname(__file__), "builds", req.task_id)
-        summary_path = os.path.join(builds_dir, "build.info.json")
+        summary_path, builds_dir = _resolve_summary_path(req.task_id)
         if not os.path.exists(summary_path):
             raise HTTPException(status_code=404, detail="build.info.json not found for task_id")
         with open(summary_path, "r") as f:
