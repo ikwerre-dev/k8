@@ -2109,7 +2109,8 @@ def docker_volume_list():
         raise HTTPException(status_code=500, detail=str(e))
 
 class VolumeRemoveRequest(BaseModel):
-    name: str
+    task_id: str
+    volume_name: str
     force: Optional[bool] = False
 
 class VolumeDetachRequest(BaseModel):
