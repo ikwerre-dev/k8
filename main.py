@@ -2107,6 +2107,41 @@ def docker_volume_list():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/docker/volume/inspect/{volume_name}")
+def docker_volume_inspect(volume_name: str):
+    try:
+        res = ds.inspect_volume(volume_name)
+        if isinstance(res, dict) and res.get("status") == "not_found":
+            raise HTTPException(status_code=404, detail=res)
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class VolumeEmptyRequest(BaseModel):
+    volume_name: str
+    force: Optional[bool] = False
+
+
+@app.post("/docker/volume/empty")
+def docker_volume_empty(req: VolumeEmptyRequest):
+    try:
+        res = ds.clear_volume_contents(req.volume_name, force=bool(req.force))
+        if isinstance(res, dict) and res.get("status") == "not_found":
+            raise HTTPException(status_code=404, detail=res)
+        if isinstance(res, dict) and res.get("status") == "attached_to_running_containers":
+            raise HTTPException(status_code=409, detail=res)
+        if isinstance(res, dict) and res.get("status") in ("clear_failed", "error"):
+            raise HTTPException(status_code=500, detail=res)
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 class VolumeRemoveRequest(BaseModel):
     task_id: str
     volume_name: str
