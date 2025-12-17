@@ -237,7 +237,7 @@ def inspect_volume(name: str) -> Dict[str, Any]:
         return {"status": "not_found", "name": name, "error": msg}
 
     attrs = v.attrs if isinstance(getattr(v, "attrs", None), dict) else {}
-    return {
+    summary: Dict[str, Any] = {
         "status": "ok",
         "name": v.name,
         "driver": attrs.get("Driver"),
@@ -248,6 +248,61 @@ def inspect_volume(name: str) -> Dict[str, Any]:
         "options": attrs.get("Options") or {},
         "attrs": attrs,
     }
+
+    try:
+        base_listing_out = client.containers.run(
+            image="alpine:3.19",
+            command="sh -c 'ls -A /mnt 2>/dev/null || true'",
+            remove=True,
+            volumes={v.name: {"bind": "/mnt", "mode": "ro"}},
+            tty=False,
+        )
+        base_listing_text = (
+            base_listing_out.decode("utf-8", errors="ignore")
+            if isinstance(base_listing_out, (bytes, bytearray))
+            else str(base_listing_out)
+        )
+        base_entries = [ln for ln in (base_listing_text or "").splitlines() if ln.strip()]
+    except Exception as e:
+        base_entries = []
+        summary["base_entries_error"] = str(e)
+
+    size_kb = None
+    try:
+        du_out = client.containers.run(
+            image="alpine:3.19",
+            command="sh -c 'du -sk /mnt 2>/dev/null | cut -f1'",
+            remove=True,
+            volumes={v.name: {"bind": "/mnt", "mode": "ro"}},
+            tty=False,
+        )
+        du_text = du_out.decode("utf-8", errors="ignore") if isinstance(du_out, (bytes, bytearray)) else str(du_out)
+        size_kb = int((du_text or "").strip()) if (du_text or "").strip() else None
+    except Exception as e:
+        summary["size_error"] = str(e)
+
+    files_count = None
+    try:
+        fc_out = client.containers.run(
+            image="alpine:3.19",
+            command="sh -c 'find /mnt -type f 2>/dev/null | wc -l'",
+            remove=True,
+            volumes={v.name: {"bind": "/mnt", "mode": "ro"}},
+            tty=False,
+        )
+        fc_text = fc_out.decode("utf-8", errors="ignore") if isinstance(fc_out, (bytes, bytearray)) else str(fc_out)
+        files_count = int((fc_text or "").strip()) if (fc_text or "").strip() else None
+    except Exception as e:
+        summary["files_count_error"] = str(e)
+
+    summary["stats"] = {
+        "base_entries": base_entries,
+        "base_entries_count": len(base_entries),
+        "files_count": files_count,
+        "size_kb": size_kb,
+        "size_bytes": (int(size_kb) * 1024) if isinstance(size_kb, int) else None,
+    }
+    return summary
 
 
 def remove_volume(name: str, force: bool = False) -> dict:
