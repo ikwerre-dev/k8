@@ -37,13 +37,25 @@ async def lifespan(app: FastAPI):
         sweeper_thread = threading.Thread(target=_tmp_sweeper_worker, daemon=True)
         sweeper_thread.start()
         try:
+            _tmp_root_sweeper_stop.clear()
+        except Exception:
+            pass
+        root_sweeper_thread = threading.Thread(target=_tmp_root_sweeper_worker, daemon=True)
+        root_sweeper_thread.start()
+        try:
             app.state.tmp_sweeper_thread = sweeper_thread
+            app.state.tmp_root_sweeper_thread = root_sweeper_thread
         except Exception:
             pass
         yield
         try:
             _tmp_sweeper_stop.set()
             sweeper_thread.join(timeout=2.0)
+        except Exception:
+            pass
+        try:
+            _tmp_root_sweeper_stop.set()
+            root_sweeper_thread.join(timeout=2.0)
         except Exception:
             pass
     except Exception as e:
@@ -70,6 +82,7 @@ def _resolve_summary_path(task_id: str):
     return summary_path, builds_dir
 
 _tmp_sweeper_stop = threading.Event()
+_tmp_root_sweeper_stop = threading.Event()
 
 def _tmp_sweeper_worker():
     try:
@@ -107,6 +120,47 @@ def _sweep_tmp_docker_builds(max_age_minutes: int = 20):
                 m = os.path.getmtime(p)
                 c = os.path.getctime(p)
                 age = now - max(m, c)
+                if age > max_age:
+                    shutil.rmtree(p)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _tmp_root_sweeper_worker():
+    try:
+        while not _tmp_root_sweeper_stop.is_set():
+            try:
+                _sweep_tmp_root_build_dirs(15)
+            except Exception:
+                pass
+            for _ in range(30):
+                if _tmp_root_sweeper_stop.is_set():
+                    break
+                time.sleep(1)
+    except Exception:
+        pass
+
+
+def _sweep_tmp_root_build_dirs(max_age_minutes: int = 15):
+    try:
+        base = "/tmp"
+        now = time.time()
+        max_age = float(max_age_minutes or 15) * 60.0
+        if not os.path.isdir(base):
+            return
+        for name in os.listdir(base):
+            try:
+                if not isinstance(name, str):
+                    continue
+                if not name.startswith("pxxl-docker_build-"):
+                    continue
+                p = os.path.join(base, name)
+                if not os.path.isdir(p):
+                    continue
+                c = os.path.getctime(p)
+                age = now - float(c)
                 if age > max_age:
                     shutil.rmtree(p)
             except Exception:
