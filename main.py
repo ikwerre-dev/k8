@@ -159,6 +159,30 @@ def _sweep_tmp_root_build_dirs(max_age_minutes: int = 15):
                 p = os.path.join(base, name)
                 if not os.path.isdir(p):
                     continue
+                try:
+                    for root, _, files in os.walk(p):
+                        for fn in files:
+                            try:
+                                if not isinstance(fn, str):
+                                    continue
+                                if not fn.endswith(".tar"):
+                                    continue
+                                fp = os.path.join(root, fn)
+                                try:
+                                    m = os.path.getmtime(fp)
+                                    c_file = os.path.getctime(fp)
+                                    age_file = now - max(float(m), float(c_file))
+                                except Exception:
+                                    continue
+                                if age_file > max_age:
+                                    try:
+                                        os.remove(fp)
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
                 c = os.path.getctime(p)
                 age = now - float(c)
                 if age > max_age:
