@@ -1961,11 +1961,15 @@ except Exception:
 class MetricsQuery(BaseModel):
     app_id: str
     limit: Optional[int] = 200
+    type: Optional[str] = "raw"
 
 @app.post("/metrics/query")
 def metrics_query(req: MetricsQuery):
     try:
-        data = db.get_metrics(req.app_id, limit=req.limit or 200)
+        if req.type == "summary":
+            data = db.get_metrics_summary(req.app_id, days=req.limit or 7)
+        else:
+            data = db.get_metrics(req.app_id, limit=req.limit or 200)
 
         container_stats = None
         app_info = db.get_application_by_id(req.app_id)
