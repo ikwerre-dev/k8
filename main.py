@@ -1966,7 +1966,21 @@ class MetricsQuery(BaseModel):
 def metrics_query(req: MetricsQuery):
     try:
         data = db.get_metrics(req.app_id, limit=req.limit or 200)
-        return {"app_id": req.app_id, "metrics": data}
+
+        container_stats = None
+        app_info = db.get_application_by_id(req.app_id)
+        if app_info and app_info.get("container_id"):
+            try:
+                details = ds.inspect_container_details(app_info["container_id"])
+                container_stats = details.get("state")
+            except Exception:
+                container_stats = {"Status": "not_found", "Running": False}
+
+        return {
+            "app_id": req.app_id,
+            "metrics": data,
+            "container_stats": container_stats
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
