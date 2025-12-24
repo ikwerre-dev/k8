@@ -76,6 +76,15 @@ def upsert_application(app_id: str, container_id: Optional[str]) -> None:
                 )
 
 
+def get_application_by_id(app_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    cur = conn.execute("SELECT app_id, container_id, created_at FROM applications WHERE app_id=?", (app_id,))
+    r = cur.fetchone()
+    if r:
+        return {"app_id": r["app_id"], "container_id": r["container_id"], "created_at": r["created_at"]}
+    return None
+
+
 def list_applications() -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.execute("SELECT app_id, container_id, created_at FROM applications")
