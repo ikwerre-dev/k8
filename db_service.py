@@ -105,6 +105,29 @@ def add_metric(app_id: str, cpu: float, ram: int, timecreated: Optional[str] = N
             conn.execute("DELETE FROM metrics WHERE timecreated < ?", (cutoff,))
 
 
+def get_metrics_summary(app_id: str, days: int = 7) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    cur = conn.execute(
+        """
+        SELECT 
+            strftime('%Y-%m-%d', timecreated) as day, 
+            AVG(cpu) as avg_cpu, 
+            AVG(ram) as avg_ram 
+        FROM metrics 
+        WHERE app_id = ? 
+        GROUP BY day 
+        ORDER BY day DESC 
+        LIMIT ?
+        """,
+        (app_id, days),
+    )
+    rows = cur.fetchall()
+    return [
+        {"app_id": app_id, "timecreated": r["day"], "cpu": round(r["avg_cpu"], 2), "ram": int(r["avg_ram"])}
+        for r in rows
+    ]
+
+
 def get_metrics(app_id: str, limit: int = 200) -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.execute(
